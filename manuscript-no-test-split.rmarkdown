@@ -1,0 +1,2110 @@
+---
+title: "Multitudes v3 (2024/25) Prediction Models"
+date: "Last Updated on `r Sys.Date()`"
+execute:
+  echo: false
+  warning: false
+  message: false
+author:
+  - name: Julian M. Siebert
+    # corresponding: true
+    # orcid: 0000-0002-0472-4677
+    email: julian.siebert@ucsf.edu
+    affiliations:
+      - name: University of California, San Francisco
+        # department: Neurology, Memory and Aging Center
+        # address: 485 Lasuen Mall
+        # city: San Francisco
+        # region: CA
+        # postal-code: 94305
+        id: ucsf
+# floatsintext: true
+format:
+  pdf:
+    number-sections: true
+    header-includes: |
+      \usepackage{pdflscape}
+      \usepackage{colortbl}
+      \usepackage{xcolor}
+      \usepackage{placeins}
+      \usepackage{float}
+      \usepackage{longtable}
+      \usepackage{array}
+      \floatplacement{table}{H}
+      \floatplacement{figure}{H}
+      \newcommand{\blandscape}{\begin{landscape}}
+      \newcommand{\elandscape}{\end{landscape}}
+    fig-pos: "!hp"
+numbered-lines: true
+# citeproc: true
+suppress-title-page: false
+bibliography: bib.bib
+# csl: apa.csl
+editor: 
+  markdown: 
+    wrap: sentence
+always_allow_html: true
+---
+
+
+
+\tableofcontents
+\newpage
+
+# Preliminaries
+
+::: callout-warning
+## Cautionary Note {.unlisted .unnumbered}
+
+This document is WORK IN PROGRESS and will be updated as new data (e.g., additional demographic information, score database updates/fixes) become available.
+:::
+
+::: callout-important
+## To Do {.unlisted .unnumbered}
+
+- ~~recompute scores for universal screening tasks with updated 2025 item parameters once available~~
+- ~~filter out implausible RAN score~~
+- ~~add 23/24 data~~
+- ~~align grades between years~~
+- ~~align tasknames between years~~
+- ~~re-run 23/24 models~~
+- ~~run 24/25 models~~
+- ~~run combined model~~
+- run two-year prediction models (K-G2)
+- ~~recompute scores for remaining tasks with updated 2025 item parameters once available~~
+<!-- - try out different definitions of risk (one/both lgs.) -->
+<!-- - try different aggregations of tasks (max, mean, etc.) for skill-specific/language-independent predictors -->
+- ~~isolate pooled models (pooled coefficients) for English model evaluations with 24/25 data~~
+
+- as per decision in data meeting on 2025-07-25
+  - ~~use combioned (23/24 and 24/25) data for Spanish model~~
+  - ~~check ELPD distribution for English samples to determine whether to use combined or only 23/24 data for English models~~
+  
+:::
+
+
+
+
+```{r setup}
+library(mice)
+library(OptimalCutpoints)
+library(caret)
+library(epiR)
+library(pROC)
+library(PRROC)
+library(Boruta)
+library(kableExtra)
+library(gt)
+library(gtsummary)
+library(corrr)
+library(ggpubr)
+library(tidyverse)
+
+# Set global chunk options
+knitr::opts_chunk$set(
+  echo = FALSE,       # Show the code
+  warning = FALSE,    # Suppress warnings
+  message = FALSE,    # Suppress messages
+  cache = TRUE,       # Store results
+  fig.width = 6,      # Default figure width
+  fig.height = 8,     # Default figure height
+  fig.align = 'center' # Center-align figures
+)
+
+set.seed(1)
+
+options(tinytex.verbose = TRUE)
+
+# set themes
+theme_gtsummary_compact()
+theme_set(theme_classic())
+theme_update(
+  panel.background = element_rect(fill = 'transparent'),
+  plot.background = element_rect(fill = 'transparent', color = NA),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  legend.background = element_rect(fill = 'transparent', color = NA)
+)
+
+mid_green <- colorRampPalette(c("white", "darkgreen"))(5)[3]
+nchart_colours <- c("100+" = mid_green, "< 100" = "lightyellow")
+
+col.all <- "darkblue"
+col.el <- "darkred"
+col.eo <- "orange"
+palette1 = c(col.all, col.el, col.eo)
+# names(palette1) = c("All", "EL", "EO")
+palette2 = c(col.all, col.el, col.eo)
+names(palette2) = c("All", "EL", "EO")
+
+palette.grades = c("red", "green", "blue")
+names(palette.grades) = c("K", "G1", "G2")
+
+col.risk <- "red3"
+col.norisk <- "green4"
+palette3 <- c(col.risk, col.norisk)
+terms.risk <- c("Struggling", "Not struggling")
+names(palette3) = terms.risk
+
+scale3 <- c("solid", "dashed", "dotted", "dotdash")
+
+source("functions.R")
+```
+
+```{r names}
+names <- list("nwr_e" = "Nonword Repetition (E)",
+              "eli_e" = "Elision - Expressive (E)",
+              "elis_e" = "Elision - Receptive (E)",
+              "elie_e" = "Elision - Expressive (E)",
+              "elir_e" = "Elision - Receptive (E)",
+              "srt_e" = "Sentence Repetition (E)",
+              "evo_e" = "Expressive Vocabulary (E)",
+              "wre_e" = "Word Reading (E)",
+              "nre_e" = "Nonword Reading (E)",
+              "spe_e" = "Spelling (E)",
+              "nsp_e" = "Narrative Story Production (E)",
+              "lsf_e" = "Letter-sound Fluency (E)",
+              "lnf_e" = "Letter Naming Fluency (E)",
+              "lco_e" = "Listening Comprehension (E)",
+              "orf_e" = "Oral Reading Fluency (E)",
+              "ranl_e" = "Rapid Letter Naming (E)",
+              "rano_e" = "Rapid Object Naming (E)",
+              "dgs_e" = "Digit Span (E)",
+              "rvpl_e" = "Rapid Visual Processing - Letters (E)",
+              "rvps_e" = "Rapid Visual Processing - Symbols (E)",
+              "mot_e" = "Global Motion Processing (E)",
+              "sgm_e" = "Segmentation - Words (E)",
+              "sgms_e" = "Segmentation - Syllables (E)",
+              "smt_e" = "Semantic Mapping (E)",
+              "srt_e" = "Sentence Repetition (E)",
+              "dgs_e" = "Digit Span (E)",
+              
+              "ctopp_elision_scale" = "CTOPP-2: Elision",
+              "celf_sentence_comp_scale" = "CELF-5: Sentence Comprehension",
+              "celf4_Spanish-to-Spanish_sentence_comp_scale" = "CELF-4: Sentence Comprehension (Spanish)",
+              "wcj_c_basicreadingskills" = "WJ Basic Reading Skills",
+              "wcm_c_basicreadingskills" = "WM Basic Reading Skills",
+              "wcj_c_broadreading" = "WJ Broad Reading",
+              "wcm_c_broadreading" = "WM Broad Reading",
+              "wcj_c_reading" = "WJ Reading",
+              "wcj_c_readingfluency" = "WJ Reading Fluency",
+              "wcm_c_reading" = "WM Reading",
+              "wcm_c_readingfluency" = "WM Reading Fluency",
+              "wcj_pc_ss" = "WJ Passage Comprehension",
+              "wcm_pc_ss" = "WM Passage Comprehension",
+              "wcj_srf_ss" = "WJ Sentence Reading Fluency",
+              "wcm_srf_ss" = "WM Sentence Reading Fluency",
+              "wcj_lwi_ss" = "WJ Letter-word Identification",
+              "wcm_lwi_ss" = "WM Letter-word Identification",
+              "wcj_wa_ss" = "WJ Word Attack",
+              "wcm_wa_ss" = "WM Word Attack",
+              "wcj_nwr_ss" = "WJ Nonword Repetition",
+              "wcm_nwr_ss" = "WM Nonword Repetition",
+              "wcj_srt_ss" = "WJ Sentence Repetition",
+              "wcm_srt_ss" = "WM Sentence Repetition",
+              "wcj_orf_ss" = "WJ Oral Reading Fluency",
+              "wcm_orf_ss" = "WM Oral Reading Fluency",
+              "wcj_spelling_ss" = "WJ Spelling",
+              "wcm_spelling_ss" = "WM Spelling",
+              "eowpvt_english_ss" = "Expressive One-Word Picture Vocabulary (English), 4th Ed.",
+              "eowpvt_spanish_ss" = "Expressive One-Word Picture Vocabulary (Spanish), 4th Ed.",
+              "tpas_elision_scale" = "Test of Phonological Awareness in Spanish: Deletion",
+              "celf4_Spanish-to-Spanish_recalling_sentence_scale" = "CELF-4: Recordando Oraciones",
+              "eowpvt_spanish_ss" = "Expressive One-Word Picture Vocabulary 4th Ed.",
+              "acadience_ranl_timer" = "Acadience RANL - Time (E)",
+              "acadience_rano_timer" = "Acadience RANO - Time (E)",
+              "acadience_Spanish-to-Spanish_ranl_timer" = "Acadience RANL - Time (S)",
+              "acadience_Spanish-to-Spanish_rano_timer" = "Acadience RANO - Time (S)",
+              "dibels_lnf_weight" = "DIBELS Letter Naming Fluency (Weight)",
+              "idel_lnf" = "IDEL Letter Naming Fluency",
+              
+              "nwr_s" = "Nonword Repetition (S)",
+              "eli_s" = "Elision - Expressive (S)",
+              "elis_s" = "Elision - Receptive (S)",
+              "elie_s" = "Elision - Expressive (S)",
+              "elir_s" = "Elision - Receptive (S)",
+              "srt_s" = "Sentence Repetition (S)",
+              "evo_s" = "Expressive Vocabulary (S)",
+              "wre_s" = "Word Reading (S)",
+              "nre_s" = "Nonword Reading (S)",
+              "spe_s" = "Spelling (S)",
+              "nsp_s" = "Narrative Story Production (S)",
+              "lsf_s" = "Letter-sound Fluency (S)",
+              "lnf_s" = "Letter Naming Fluency (S)",
+              "lco_s" = "Listening Comprehension (S)",
+              "orf_s" = "Oral Reading Fluency (S)",
+              "ranl_s" = "Rapid Letter Naming (S)",
+              "rano_s" = "Rapid Object Naming (S)",
+              "dgs_s" = "Digit Span (S)",
+              "rvpl_s" = "Rapid Visual Processing - Letters (S)",
+              "rvps_s" = "Rapid Visual Processing - Symbols (S)",
+              "mot_s" = "Global Motion Processing (S)",
+              "sgm_s" = "Segmentation - Words (S)",
+              "sgms_s" = "Segmentation - Syllables (S)",
+              "smt_s" = "Semantic Mapping (S)",
+              "srt_s" = "Sentence Repetition (S)",
+              "dgs_s" = "Digit Span (S)",
+              
+              "shadowMax" = "Max. Shadow Feature",
+              "shadowMin" = "Min. Shadow Feature",
+              "shadowMean" = "Mean Shadow Feature"
+              )
+```
+
+```{r load-data}
+df <- read_csv("data/df-mv3-prediction-models_2025-08-01.csv") %>% 
+  mutate(grade = case_when(grade == "Kindergarten" ~ "K",
+                           grade == "Grade 1" ~ "G1",
+                           grade == "Grade 2" ~ "G2"
+                           ),
+         grade = factor(grade, levels = c("K", "G1", "G2")),
+         risk_en = case_when(risk_en == 1 ~ "Struggling",
+                             risk_en == 0 ~ "Not struggling",
+                             ),
+         risk_es = case_when(risk_es == 1 ~ "Struggling",
+                             risk_es == 0 ~ "Not struggling",
+                             ),
+         risk_ext_en = case_when(outcomescore_en <= 87 ~ "Struggling",
+                                 outcomescore_en > 87 ~ "Not struggling"),
+         risk_ext_es = case_when(outcomescore_es <= 87 ~ "Struggling",
+                                 outcomescore_es > 87 ~ "Not struggling"),
+         task = case_when(task == "eli" ~ "elie",
+                          task == "elis" ~ "elir",
+                          TRUE ~ task
+                          ),
+         task = case_when(lang == "en-US" ~ paste0(tolower(task), "_e"),
+                          lang == "es-US" ~ paste0(tolower(task), "_s"),
+                          ),
+         lang_inst = case_when(lang_of_instruction == "English Only" ~ "English Instruction",
+                               !is.na(lang_of_instruction) ~ "Bilingual Instruction"
+                               )
+         ) %>% 
+  select(-lang_of_instruction) %>% 
+  filter(!grepl("dgs",task)) %>% 
+  group_by(task, grade, lang) %>%
+  mutate(n  = n()) %>% 
+  ungroup() %>% 
+  filter(n >= 50) %>% 
+  select(-n) %>% 
+  group_by(student_id, event, task, lang) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  # filter out improbable RAN scores
+  filter(!(grepl("RAN", task) & score > 3),
+         !(grepl("ran", task) & score > 3),
+         !(task %in% c("LNF", "LSF") & score < 0),
+         !(task %in% c("LNF", "LSF") & score > 50),
+         !(task == "ORF" & score > 5)
+         ) %>% 
+  # mutate(score = case_when(grepl("ran", task) & score >= 3 ~ NA,
+  #                          TRUE ~ score),
+  #        ) %>% 
+  filter(!is.na(score))
+```
+
+
+
+\newpage
+\FloatBarrier
+
+# ENGLISH MODELS
+
+
+
+```{r en-dfs}
+df.en <- df %>% 
+  filter(lang == "en-US",
+         !is.na(risk_en)
+         ) %>% 
+  rename(risk = risk_en,
+         risk_ext = risk_ext_en,
+         outcomescore = outcomescore_en,
+         outcomepercentile = outcomepercentile_en
+  ) %>% 
+  mutate(risklabel = risk,
+         risk = case_when(risk == "Struggling" ~ 1,
+                          risk == "Not struggling" ~ 0
+                          )
+         ) %>% 
+  select(-c(contains("_en"), contains("_es"))) %>% 
+  filter(!is.na(risk)) %>% 
+  mutate(model_lang = "English",
+         task_lang = "English"
+  )
+
+df.2324.en <- df %>% 
+  filter(ay == "AY 23/24",
+         lang == "en-US",
+         !is.na(risk_en)
+         ) %>% 
+  mutate(model_lang = "English",
+         task_lang = "English"
+  ) %>% 
+  rename(risk = risk_en,
+         risk_ext = risk_ext_en,
+         outcomescore = outcomescore_en,
+         outcomepercentile = outcomepercentile_en
+  ) %>% 
+  mutate(risklabel = risk,
+         risk = case_when(risk == "Struggling" ~ 1,
+                          risk == "Not struggling" ~ 0
+                          )
+         ) %>% 
+  select(-c(contains("_en"), contains("_es"))) %>% 
+  filter(!is.na(risk))
+
+df.2425.en <- df %>% 
+  filter(ay == "AY 24/25",
+         lang == "en-US",
+         !is.na(risk_en)
+         ) %>% 
+  mutate(model_lang = "English",
+         task_lang = "English"
+  ) %>% 
+  rename(risk = risk_en,
+         risk_ext = risk_ext_en,
+         outcomescore = outcomescore_en,
+         outcomepercentile = outcomepercentile_en
+  ) %>% 
+  mutate(risklabel = risk,
+         risk = case_when(risk == "Struggling" ~ 1,
+                          risk == "Not struggling" ~ 0
+                          )
+         ) %>% 
+  select(-c(contains("_en"), contains("_es"))) %>% 
+  filter(!is.na(risk))
+
+N.2324 <- length(unique(df.2324.en$student_id))
+n.school.2324 <- length(unique(df.2324.en$school))
+n.district.2324 <- length(unique(df.2324.en$district))
+
+N.2425 <- length(unique(df.2425.en$student_id))
+n.school.2425 <- length(unique(df.2425.en$school))
+n.district.2425 <- length(unique(df.2425.en$district))
+```
+
+
+
+<!-- - English models are built using data collected in the *2023/24* academic year only (sample described in left set of columns in @tbl-sample-en); *N* = `r N.2324`, from `r n.school.2324` schools across `r n.district.2324` districts -->
+<!-- - I am using re-calculated theta scores using the updated (MV3/2025) item parameters -->
+<!-- <!-- - benefit: sample is representative of CA student population --> -->
+<!-- - English models are evaluated using unseen data from *2024/25* academic year (sample described in right set of columns @tbl-sample-en); *N* = `r N.2425`, from `r n.school.2425` schools across `r n.district.2425` districts -->
+
+## Sample
+
+\blandscape
+
+
+
+```{r}
+#| label: tbl-sample-en
+#| tbl-cap: "Demographic Characteristics of the English Model Building and Evaluation Samples by Grade\\newline"
+df.en %>% 
+  select(c(student_id, ay, grade, gender, race, ethnicity, el, ever_disability, home_lang, lang_inst)) %>%
+  unique() %>% 
+  # mutate(ay = case_when(ay == "AY 23/24" ~ "Model Building - AY 23/24",
+  #                       ay == "AY 24/25" ~ "Model Evaluation - AY 24/25",
+  #                       )
+  #        ) %>% 
+  select(-student_id) %>% 
+  tbl_strata(strata = ay,
+             .tbl_fun =
+               ~ .x |>
+               tbl_summary(by = grade,
+                           label = c(gender ~ "Gender",
+                                     race ~ "Race",
+                                     ethnicity ~ "Ethnicity",
+                                     el ~ "ELPD",
+                                     ever_disability  ~ "Ever IEP/504",
+                                     home_lang ~ "Home Language",
+                                     lang_inst ~ "Lg. of Instruction"
+                           )
+               ) 
+  ) %>% 
+  modify_footnote(everything() ~ NA)
+```
+
+
+
+\elandscape
+\FloatBarrier
+
+## Descriptives
+
+### Distributions of English Multitudes Tasks in Fall '23
+
+
+
+```{r}
+#| label: fig-distributions-en-ay2324
+#| fig-cap: "Distributions of English Multitudes Tasks by Grade (Fall '23)"
+#| fig-height: 5
+plots <- list()
+df.2324.en$grade <- factor(df.2324.en$grade, levels = c("K", "G1", "G2"))
+
+for (t in unique(df.2324.en$task)) {
+  plot <- df.2324.en %>% 
+    filter(task == t) %>% 
+    ggplot(aes(x = score, group = grade, fill = factor(grade, levels = c("K", "G1", "G2")))) +
+    geom_density(alpha = .5) +
+    theme(legend.position = "bottom") +
+    scale_fill_manual(values = palette.grades, drop = FALSE) +
+    labs(x = "Score",
+         y = " ",
+         title = paste(t),
+         fill = "Grade") +
+    theme(axis.text.y= element_blank(),
+          axis.title.x = element_blank())
+  plots[[t]] <- plot
+}
+
+ggarrange(plotlist = plots,
+          common.legend = TRUE,
+          legend = "bottom"
+)
+```
+
+
+
+### Distributions of English Outcome Measures (Spring '24 and Spring '25)
+
+\FloatBarrier
+
+
+
+```{r fig.height=4}
+#| label: fig-outcomes-en
+#| fig-cap: "Distribution of Woodcock-Johnson Basic Reading Skills Cluster (for Kindergarten) Broad Reading Cluster (for Grades 1 and 2) by Grade and Language with Struggling Readers (</= 20th Percentile) Highlighted  (Spring '24 and Spring '25)."
+
+df.en %>% 
+  mutate(ay = case_when(ay == "AY 23/24" ~ "Spring '24",
+                        ay == "AY 24/25" ~ "Spring '25",
+                        )
+         ) %>% 
+  ggplot(aes(x = outcomescore)) +
+  geom_vline(xintercept = 70, colour = "gray", linetype = 2) +
+  geom_vline(xintercept = 85, colour = "gray", linetype = 2) +
+  geom_vline(xintercept = 100, colour = "darkgray", linetype = 1) +
+  geom_vline(xintercept = 115, colour = "gray", linetype = 2) +
+  geom_vline(xintercept = 130, colour = "gray", linetype = 2) +
+  geom_histogram(#fill = "darkgreen",
+    aes(group = risklabel, fill = risklabel),
+    binwidth = 1
+  ) +
+  facet_grid(cols = vars(grade),
+             rows = vars(ay),
+             scales = "free"
+  ) +
+  scale_x_continuous(breaks = c(70, 85, 100, 115, 130), labels = c("70\n(-2SD)", "85\n", "100\n(M)", "115", "130\n(+2SD)")) +
+  labs(x = "Standard Score",
+       y = "No. of Students",
+       fill = "Defined as") +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = palette3)
+```
+
+```{r}
+#| label: tbl-outcomes-en
+#| tbl-cap: "Comparison of Proportions of Struggling Readers (</= 20th Percentile) in the Study Sample Based on Overall Multitudes Sample and on Published Norms (Spring '24 and Spring '25)."
+
+df.en |> 
+  mutate(ay = case_when(ay == "AY 23/24" ~ "Spring '24",
+                        ay == "AY 24/25" ~ "Spring '25"
+                        ),
+         ay = factor(ay, levels = c("Spring '24", "Spring '25"))
+         ) %>% 
+  select(c(student_id, ay, grade, risk_ext, risklabel)) |>
+  unique() |> 
+  select(-student_id) |>
+  tbl_strata(strata = ay,
+             .tbl_fun =
+               ~ .x |>
+               tbl_summary(by = c(grade),
+                           label = c(risklabel ~ "Sample-based",
+                                     risk_ext ~ "Norm-based"
+                           )
+               ) 
+  ) |> 
+  modify_footnote(everything() ~ NA) |> 
+  modify_header(label ~ "**Reference**") |>
+  as_kable_extra(booktabs = TRUE,
+                 linesep = c("", "", "\\addlinespace")
+  ) |> 
+  kable_styling(latex_options = c("scale_down"))
+```
+
+
+
+\FloatBarrier
+\blandscape
+
+## LOGO Cross-validated Models (2023/24 Only)
+
+
+
+```{r model-comparison-en-ay2324, warning=FALSE, message=FALSE}
+df.modelcomp <- df.2324.en
+
+models <- list(
+  "K" = list("0. LNF only" = "lnf_e",
+             "1. LNF, RANO, ELIR, EVO" = "lnf_e + rano_e + elir_e + evo_e",
+             "2. LNF, RANO, EVO" = "lnf_e + rano_e + evo_e",
+             "3. LNF, RANO, ELIR" = "lnf_e + rano_e + elir_e"
+             ),
+"G1" = list("0. WRE only" = "wre_e",
+            "1. WRE, RANO, LSF, EVO" = "wre_e + rano_e + lsf_e + evo_e",
+            "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e",
+            "3. WRE, RANO" = "wre_e + rano_e",
+            "4. WRE, RANO, EVO" = "wre_e + rano_e + evo_e",
+            "5. WRE, EVO" = "wre_e + evo_e"
+            ),
+"G2" = list("0. WRE only" = "wre_e",
+            "1. WRE, RANL, EVO" = "wre_e + ranl_e + evo_e",
+            "2. WRE, RANL" = "wre_e + ranl_e"
+            )
+)
+
+lg = "English"
+
+roc.curves.en.2324 <- list()
+proc.curves.en.2324 <- list()
+pred.dfs.en.2324 <- list()
+# aucs <- list()
+pooled.models.en.2324 <- list("K" = list(),
+                              "G1" = list(),
+                              "G2" = list()
+                              )
+opt.cuts.en.2324 <- list("K" = list(),
+                         "G1" = list(),
+                         "G2" = list()
+                         )
+
+# Create a dataframe to hold evaluation metrics
+dummy_cm <- confusionMatrix(factor(c(0,1,1,0)), factor(c(0,1,0,1)))
+dummy_metrics <- extract_metrics(dummy_cm)
+df.eval.en.2324 <- data.frame(matrix(ncol = ncol(dummy_metrics), nrow = 0))
+colnames(df.eval.en.2324) <- colnames(dummy_metrics)
+df.eval.en.2324 <- data.frame(grade = as.character(), 
+                              model = as.character(),
+                              predictors = as.character(),
+                              group = as.character(),
+                              n = as.numeric(),
+                              method = as.character(),
+                              opt.cut = as.numeric()
+                              ) |> 
+  cbind(df.eval.en.2324)
+
+groups = c("All", "EL", "EO")
+lg ="English"
+
+for (grade in names(models)) {
+  for (model in names(models[[grade]])) {
+    
+    predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE)
+    
+    # build model
+    results <- build_prediction_model_bootstrap_cv(df.modelcomp,
+                                         grd = grade,
+                                         lg = lg,
+                                         mdl = models[[grade]][[model]]
+                                         )
+    
+    # get predictions
+    df.risk.pred <- results[[1]] |> 
+      # add relevant demographic variables
+      left_join(df |>
+                  select(c(student_id,
+                           el,
+                           race,
+                           ethnicity,
+                           ever_disability
+                  )
+                  ) |>
+                  unique(),
+                by = "student_id"
+      )
+    # get optimal cutpoint
+    opt.cut <- results[[3]]
+    
+    for (group in groups) {
+      
+      if (group == "All") {
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred$pred.risk,
+                                   reference = df.risk.pred$risk),
+                             positive = "1")
+        
+        # n = length(unique(df.risk.pred$student_id))
+        n = df.risk.pred %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = group,
+                 n = n,
+                 method = "Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2324 <- df.eval.en.2324 |> 
+          rbind(df.out)
+        
+      } else if (group == "EO") {
+        
+        df.risk.pred.inner <- df.risk.pred |> 
+          filter(el == "EO")
+        
+        n = df.risk.pred.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        if (n < 5) next
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
+                                   reference = df.risk.pred.inner$risk),
+                             positive = "1")
+
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = "EO",
+                 n = n,
+                 method ="Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2324 <- df.eval.en.2324 |> 
+          rbind(df.out)
+        
+      } else if (group == "EL") {
+        
+        df.risk.pred.inner <- df.risk.pred |> 
+          filter(el == "EL")
+        
+        n = df.risk.pred.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        if (n < 5) next
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
+                                   reference = df.risk.pred.inner$risk),
+                             positive = "1")
+
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = "EL",
+                 n = n,
+                 method ="Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2324 <- df.eval.en.2324 |> 
+          rbind(df.out)
+      }
+    }
+    
+    df.plots <- df.risk.pred %>% filter(!is.na(pred.risk))
+    # save plots and prediction outputs for later use
+    out = plot_roc_curves_within_model(df.plots)
+    roc.curves.en.2324[[model]] <- out[[1]] + labs(title = model,
+                                                   subtitle = paste0("risk ~ ", models[[model]]))
+    proc.curves.en.2324[[model]] <- out[[2]] + labs(title = model,
+                                                    subtitle = paste0("risk ~ ", models[[model]]))
+    pred.dfs.en.2324[[model]] <- df.risk.pred
+    # aucs[[model]] <- mean(out[[1]]$data$AUROC)
+    
+    pooled.models.en.2324[[grade]][[model]] <- results[[2]]
+    opt.cuts.en.2324[[grade]][[model]] <- opt.cut
+  }
+}
+
+# re-arrange columns
+df.eval.en.2324 <- df.eval.en.2324 |> 
+  select(c(grade, group, model, predictors, method, opt.cut), everything())
+
+df.eval.en.wide.2324 <- df.eval.en.2324 |> 
+  pivot_wider(names_from = group, values_from = Accuracy:n) |> 
+  select(c(grade, model, predictors, method, opt.cut,
+           contains("_All"),
+           contains("_EL"),
+           contains("_EO")
+  )
+  ) %>% 
+  group_by(grade, model) |>
+  arrange(desc(Balanced.Accuracy_All)) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2"))) %>% 
+  arrange(grade)
+```
+
+```{r}
+#| label: tbl-model-eval-summary-ay2324-en
+#| tbl-cap: "English-to-English Prediction Models Using Data from 2023/24 AY Only.\\newline"
+
+df.eval.en.wide.2324 |> 
+  # filter(method == "Youden") |> 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
+         model = str_sub(model, 3, 100)
+  ) |>
+  arrange(grade, model) |> 
+  unique() |> 
+  select(c(grade,
+           model,
+           # method,
+           contains("n_"),
+           contains("Accuracy_"),
+           contains("Sensitivity"),
+           contains("Specificity"),
+           contains(".Accuracy"),
+           contains("Prevalence"),
+           -contains("Precision")
+  )
+  ) |> 
+  select(c(grade,
+           model,
+           # method,
+           contains("All"),
+           contains("EL"),
+           contains("EO")
+           )
+         ) %>% 
+  mutate(across(c(contains("Accuracy"), contains("Sensitivity"), contains("Specificity")), color_format)) %>% 
+  kable(format = "latex",
+        escape = FALSE,
+        booktabs = TRUE,
+        digits = 3,
+        align = c("l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"),
+        col.names = c("Grade",
+                      "Predictors",
+                      # "Method",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev.",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev.",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev."
+        ),
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 3))
+  ) |> 
+  kable_styling(
+    full_width = FALSE,
+    latex_options = c("scale_down")
+  ) |> 
+  add_header_above(c(" " = 2, "All" = 7, "EL" = 7, "EO" = 7)) |> 
+  add_footnote(label = "Note. green: >= .8; black: >= .7; yellow: >= .6; red otherwise", notation = "none")
+```
+
+
+
+
+## LOGO Cross-validated Models (2023/24 and 2024/25 Combined)
+\FloatBarrier
+
+
+
+```{r model-comparison-en-ays2325, warning=FALSE, message=FALSE}
+df.modelcomp <- df.en
+
+models <- list(
+  "K" = list("0. LNF only" = "lnf_e",
+             "1. LNF, RANO, ELIR, EVO" = "lnf_e + rano_e + elir_e + evo_e",
+             "2. LNF, RANO, EVO" = "lnf_e + rano_e + evo_e",
+             "3. LNF, RANO, ELIR" = "lnf_e + rano_e + elir_e"
+  ),
+  "G1" = list("0. WRE only" = "wre_e",
+              "1. WRE, RANO, LSF, EVO" = "wre_e + rano_e + lsf_e + evo_e",
+              "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e",
+              "3. WRE, RANO" = "wre_e + rano_e",
+              "4. WRE, RANO, EVO" = "wre_e + rano_e + evo_e",
+              "5. WRE, EVO" = "wre_e + evo_e"
+  ),
+  "G2" = list("0. WRE only" = "wre_e",
+              "1. WRE, RANL, EVO" = "wre_e + ranl_e + evo_e",
+              "2. WRE, RANL" = "wre_e + ranl_e"
+  )
+)
+
+lg = "English"
+
+roc.curves.en.2325 <- list()
+proc.curves.en.2325 <- list()
+pred.dfs.en.2325 <- list()
+# aucs <- list()
+pooled.models.en.2325 <- list("K" = list(),
+                              "G1" = list(),
+                              "G2" = list()
+)
+opt.cuts.en.2325 <- list("K" = list(),
+                         "G1" = list(),
+                         "G2" = list()
+)
+
+# Create a dataframe to hold evaluation metrics
+dummy_cm <- confusionMatrix(factor(c(0,1,1,0)), factor(c(0,1,0,1)))
+dummy_metrics <- extract_metrics(dummy_cm)
+df.eval.en.2325 <- data.frame(matrix(ncol = ncol(dummy_metrics), nrow = 0))
+colnames(df.eval.en.2325) <- colnames(dummy_metrics)
+df.eval.en.2325 <- data.frame(grade = as.character(), 
+                              model = as.character(),
+                              predictors = as.character(),
+                              group = as.character(),
+                              n = as.numeric(),
+                              method = as.character(),
+                              opt.cut = as.numeric()
+) |> 
+  cbind(df.eval.en.2325)
+
+groups = c("All", "EL", "EO")
+lg ="English"
+
+for (grade in names(models)) {
+  for (model in names(models[[grade]])) {
+    
+    predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE)
+    
+    # build model
+    results <- build_prediction_model_bootstrap_cv(df.modelcomp,
+                                                   grd = grade,
+                                                   lg = lg,
+                                                   mdl = models[[grade]][[model]]
+    )
+    
+    # get predictions
+    df.risk.pred <- results[[1]] |> 
+      # add relevant demographic variables
+      left_join(df |>
+                  select(c(student_id,
+                           el,
+                           race,
+                           ethnicity,
+                           ever_disability
+                  )
+                  ) |>
+                  unique(),
+                by = "student_id"
+      )
+    # get optimal cutpoint
+    opt.cut <- results[[3]]
+    
+    for (group in groups) {
+      
+      if (group == "All") {
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred$pred.risk,
+                                   reference = df.risk.pred$risk),
+                             positive = "1")
+        
+        # n = length(unique(df.risk.pred$student_id))
+        n = df.risk.pred %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = group,
+                 n = n,
+                 method = "Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2325 <- df.eval.en.2325 |> 
+          rbind(df.out)
+        
+      } else if (group == "EO") {
+        
+        df.risk.pred.inner <- df.risk.pred |> 
+          filter(el == "EO")
+        
+        n = df.risk.pred.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        if (n < 5) next
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
+                                   reference = df.risk.pred.inner$risk),
+                             positive = "1")
+        
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = "EO",
+                 n = n,
+                 method ="Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2325 <- df.eval.en.2325 |> 
+          rbind(df.out)
+        
+      } else if (group == "EL") {
+        
+        df.risk.pred.inner <- df.risk.pred |> 
+          filter(el == "EL")
+        
+        n = df.risk.pred.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        if (n < 5) next
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
+                                   reference = df.risk.pred.inner$risk),
+                             positive = "1")
+        
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = "EL",
+                 n = n,
+                 method ="Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2325 <- df.eval.en.2325 |> 
+          rbind(df.out)
+      }
+    }
+    
+    df.plots <- df.risk.pred %>% filter(!is.na(pred.risk))
+    # save plots and prediction outputs for later use
+    out = plot_roc_curves_within_model(df.plots)
+    roc.curves.en.2325[[model]] <- out[[1]] + labs(title = model,
+                                                   subtitle = paste0("risk ~ ", models[[model]]))
+    proc.curves.en.2325[[model]] <- out[[2]] + labs(title = model,
+                                                    subtitle = paste0("risk ~ ", models[[model]]))
+    pred.dfs.en.2325[[model]] <- df.risk.pred
+    # aucs[[model]] <- mean(out[[1]]$data$AUROC)
+    
+    pooled.models.en.2325[[grade]][[model]] <- results[[2]]
+    opt.cuts.en.2325[[grade]][[model]] <- opt.cut
+  }
+}
+
+# re-arrange columns
+df.eval.en.2325 <- df.eval.en.2325 |> 
+  select(c(grade, group, model, predictors, method, opt.cut), everything())
+
+df.eval.en.wide.2325 <- df.eval.en.2325 |> 
+  pivot_wider(names_from = group, values_from = Accuracy:n) |> 
+  select(c(grade, model, predictors, method, opt.cut,
+           contains("_All"),
+           contains("_EL"),
+           contains("_EO")
+  )
+  ) %>% 
+  group_by(grade, model) |>
+  arrange(desc(Balanced.Accuracy_All)) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2"))) %>% 
+  arrange(grade)
+```
+
+```{r}
+#| label: tbl-model-eval-summary-ays2325-en
+#| tbl-cap: "English-to-English Prediction Models Using Data from Both 2023/24 and 2024/25 AYs.\\newline"
+
+df.eval.en.wide.2325 |> 
+  # filter(method == "Youden") |> 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
+         model = str_sub(model, 3, 100)
+  ) |>
+  arrange(grade, model) |> 
+  unique() |> 
+  select(c(grade,
+           model,
+           # method,
+           contains("n_"),
+           contains("Accuracy_"),
+           contains("Sensitivity"),
+           contains("Specificity"),
+           contains(".Accuracy"),
+           contains("Prevalence"),
+           -contains("Precision")
+  )
+  ) |> 
+  select(c(grade,
+           model,
+           # method,
+           contains("All"),
+           contains("EL"),
+           contains("EO")
+  )
+  ) %>% 
+  mutate(across(c(contains("Accuracy"), contains("Sensitivity"), contains("Specificity")), color_format)) %>% 
+  kable(format = "latex",
+        escape = FALSE,
+        booktabs = TRUE,
+        digits = 3,
+        align = c("l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"),
+        col.names = c("Grade",
+                      "Predictors",
+                      # "Method",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev.",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev.",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev."
+        ),
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 3))
+  ) |> 
+  kable_styling(
+    full_width = FALSE,
+    latex_options = c("scale_down")
+  ) |> 
+  add_header_above(c(" " = 2, "All" = 7, "EL" = 7, "EO" = 7)) |> 
+  add_footnote(label = "Note. green: >= .8; black: >= .7; yellow: >= .6; red otherwise", notation = "none")
+```
+
+
+
+<!-- ## 'Final' Models  (2023/24 Only)  -->
+<!-- ```{r final-model-training-en} -->
+<!-- df.modelcomp <- df.2324.en -->
+
+<!-- models <- list( -->
+<!--   "K" = list("0. LNF only" = "lnf_e", -->
+<!--              "1. LNF, RANO, ELIR, EVO" = "lnf_e + rano_e + elir_e + evo_e", -->
+<!--              "2. LNF, RANO, EVO" = "lnf_e + rano_e + evo_e", -->
+<!--              "3. LNF, RANO, ELIR" = "lnf_e + rano_e + elir_e" -->
+<!--              ), -->
+<!-- "G1" = list("0. WRE only" = "wre_e", -->
+<!--             "1. WRE, RANO, LSF, EVO" = "wre_e + rano_e + lsf_e + evo_e", -->
+<!--             "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e", -->
+<!--             "3. WRE, RANO" = "wre_e + rano_e", -->
+<!--             "4. WRE, RANO, EVO" = "wre_e + rano_e + evo_e", -->
+<!--             "5. WRE, EVO" = "wre_e + evo_e" -->
+<!--             ), -->
+<!-- "G2" = list("0. WRE only" = "wre_e", -->
+<!--             "1. WRE, RANL, EVO" = "wre_e + ranl_e + evo_e", -->
+<!--             "2. WRE, RANL" = "wre_e + ranl_e" -->
+<!--             ) -->
+<!-- ) -->
+<!-- lg = "English" -->
+
+<!-- final.models.en.2324 <- list("K" = list(), -->
+<!--                              "G1" = list(), -->
+<!--                              "G2" = list() -->
+<!--                              ) -->
+<!-- final.opt.cuts.en.2324 <- list("K" = list(), -->
+<!--                                "G1" = list(), -->
+<!--                                "G2" = list() -->
+<!--                                ) -->
+
+<!-- for (grade in names(models)) { -->
+<!--   for (model in names(models[[grade]])) { -->
+
+<!--     predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE) -->
+
+<!--     # build model -->
+<!--     results <- train_model_final(df.modelcomp, -->
+<!--                                  grd = grade, -->
+<!--                                  lg = lg, -->
+<!--                                  mdl = models[[grade]][[model]] -->
+<!--                                  ) -->
+
+<!--     final.models.en.2324[[grade]][[model]] <- results[[1]] -->
+<!--     final.opt.cuts.en.2324[[grade]][[model]] <- results[[2]] -->
+<!--   } -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- ```{r model-eval-en-2324} -->
+<!-- # Create a dataframe to hold evaluation metrics -->
+<!-- dummy_cm <- confusionMatrix(factor(c(0,1,1,0)), factor(c(0,1,0,1))) -->
+<!-- dummy_metrics <- extract_metrics(dummy_cm) -->
+<!-- df.eval.en.final.2324 <- data.frame(matrix(ncol = ncol(dummy_metrics), nrow = 0)) -->
+<!-- colnames(df.eval.en.final.2324) <- colnames(dummy_metrics) -->
+<!-- df.eval.en.final.2324 <- data.frame(grade = as.character(),  -->
+<!--                               model = as.character(), -->
+<!--                               # predictors = as.character(), -->
+<!--                               group = as.character(), -->
+<!--                               n = as.numeric(), -->
+<!--                               method = as.character(), -->
+<!--                               opt.cut = as.numeric() -->
+<!--                               ) |>  -->
+<!--   cbind(df.eval.en.final.2324) -->
+
+<!-- groups = c("All", "EL", "EO") -->
+<!-- lg ="English" -->
+
+<!-- for (grd in names(models)) { -->
+<!--   for (mdl in names(models[[grd]])) { -->
+<!--     # get appropriate model & corresponding optimal cutpoint -->
+
+<!--     df.model <- df.2324.en %>%  -->
+<!--       filter(grade == grd) %>%  -->
+<!--       select(c(student_id, -->
+<!--                group = district, -->
+<!--                risk, -->
+<!--                task, -->
+<!--                score -->
+<!--                ) -->
+<!--              ) |>  -->
+<!--       unique() |>  -->
+<!--       pivot_wider(names_from = task, values_from = score, values_fn = mean) |>  -->
+<!--       ungroup() -->
+
+<!--     model <- final.models.en.2324[[grd]][[mdl]] -->
+<!--     opt.cut <- final.opt.cuts.en.2324[[grd]][[mdl]] -->
+<!--     # extract coefficients from pooled model -->
+<!--     coef_vector <- summary(model) %>% -->
+<!--       select(term, estimate) %>% -->
+<!--       deframe() -->
+<!--     # deploy model to reshaped and filtered 24/25 data -->
+<!--     df.results <- df.model %>% -->
+<!--       mutate(`(Intercept)` = 1) %>% -->
+<!--       select(all_of(names(coef_vector))) %>% -->
+<!--       mutate( -->
+<!--         logit = as.vector(as.matrix(.) %*% coef_vector), -->
+<!--         pred.prob = plogis(logit) -->
+<!--     )  -->
+<!--     # add model predictions to df -->
+<!--     df.out0 <- df.model %>%  -->
+<!--       mutate(pred.prob = df.results$pred.prob, -->
+<!--              pred.logit = df.results$logit, -->
+<!--              risk = risk, -->
+<!--              pred.risk = case_when(pred.prob < opt.cut ~ 0, -->
+<!--                                    pred.prob >= opt.cut ~ 1, -->
+<!--                                    is.na(pred.prob) ~ NA, -->
+<!--                                    ) -->
+<!--              ) %>%  -->
+<!--       select(c(student_id, risk, contains("pred"))) %>%  -->
+<!--       left_join(df |> -->
+<!--                   select(c(student_id, -->
+<!--                            el, -->
+<!--                            race, -->
+<!--                            ethnicity, -->
+<!--                            ever_disability -->
+<!--                   ) -->
+<!--                   ) |> -->
+<!--                   unique(), -->
+<!--                 by = "student_id" -->
+<!--       ) -->
+
+<!--     df.temp.outer <- df.out0 %>%  -->
+<!--       mutate(group = el) %>%  -->
+<!--       rbind(df.out0 %>%  -->
+<!--               mutate(group = "All") -->
+<!--             ) -->
+
+<!--     # determine optimisation method based on method used in 23/24 data -->
+<!--     # method = if_else(grd == "G1" & mdl == "2. WRE, RANO, LSF", "MaxSpSe", "Youden") -->
+
+<!--     for (group in groups) { -->
+
+<!--         if (group == "All") { -->
+<!--           cm = confusionMatrix(table(predicted = df.temp.outer$pred.risk, -->
+<!--                                      reference = df.temp.outer$risk), -->
+<!--                                positive = "1") -->
+
+<!--           # n = length(unique(df.temp.outer$student_id)) -->
+<!--           n = df.temp.outer %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow() -->
+
+<!--           df.out <- extract_metrics(cm) |>  -->
+<!--             mutate(grade = grd, -->
+<!--                    model = mdl, -->
+<!--                    # predictors = predictors, -->
+<!--                    group = group, -->
+<!--                    n = n, -->
+<!--                    method = "Youden", -->
+<!--                    opt.cut = opt.cut -->
+<!--             ) -->
+
+<!--           df.eval.en.2324 <- df.eval.en.2324 |>  -->
+<!--             rbind(df.out) -->
+
+<!--         } else if (group == "EO") { -->
+
+<!--           df.temp.inner <- df.temp.outer |>  -->
+<!--             filter(el == "EO") -->
+
+<!--           # n = df.temp.inner %>% nrow() -->
+<!--           n = df.temp.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow() -->
+<!--           if (n < 5) next -->
+
+<!--           cm = confusionMatrix(table(predicted = df.temp.inner$pred.risk, -->
+<!--                                      reference = df.temp.inner$risk), -->
+<!--                                positive = "1") -->
+
+<!--           # n = length(unique(df.temp.inner$student_id)) -->
+
+<!--           df.out <- extract_metrics(cm) |>  -->
+<!--             mutate(grade = grd, -->
+<!--                    model = mdl, -->
+<!--                    # predictors = predictors, -->
+<!--                    group = "EO", -->
+<!--                    n = n, -->
+<!--                    method ="Youden", -->
+<!--                    opt.cut = opt.cut -->
+<!--             ) -->
+
+<!--           df.eval.en.2324 <- df.eval.en.2324 |>  -->
+<!--             rbind(df.out) -->
+
+<!--         } else if (group == "EL") { -->
+
+<!--           df.temp.inner <- df.temp.outer |>  -->
+<!--             filter(el == "EL") -->
+
+<!--           n = df.temp.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow() -->
+<!--           if (n < 5) next -->
+
+<!--           cm = confusionMatrix(table(predicted = df.temp.inner$pred.risk, -->
+<!--                                      reference = df.temp.inner$risk), -->
+<!--                                positive = "1") -->
+
+<!--           n = df.temp.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow() -->
+
+<!--           df.out <- extract_metrics(cm) |>  -->
+<!--             mutate(grade = grd, -->
+<!--                    model = mdl, -->
+<!--                    # predictors = predictors, -->
+<!--                    group = "EL", -->
+<!--                    n = n, -->
+<!--                    method ="Youden", -->
+<!--                    opt.cut = opt.cut -->
+<!--             ) -->
+
+<!--           df.eval.en.2324 <- df.eval.en.2324 |>  -->
+<!--             rbind(df.out) -->
+
+<!--         } -->
+<!--       } -->
+<!--   } -->
+<!-- } -->
+
+<!-- test = df.eval.en.2324 -->
+<!-- df.eval.en.2324 = test -->
+<!-- # re-arrange columns -->
+<!-- df.eval.en.2324 <- df.eval.en.2324 |>  -->
+<!--   select(c(grade, group, model, method, opt.cut), everything()) -->
+
+<!-- df.eval.en.wide.2324 <- df.eval.en.2324 |>  -->
+<!--   filter(method == "Youden") %>%  -->
+<!--   pivot_wider(names_from = group, values_from = Accuracy:n) |>  -->
+<!--   select(c(grade, model, method, opt.cut, -->
+<!--            contains("_All"), -->
+<!--            contains("_EL"), -->
+<!--            contains("_EO") -->
+<!--   ) -->
+<!--   ) %>%  -->
+<!--   mutate(grade = factor(grade, levels = c("K", "G1", "G2"))) %>%  -->
+<!--   arrange(grade) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- #| label: tbl-model-eval-summary-finalmodels-2324-en -->
+<!-- #| tbl-cap: "Final (Full Data) English-to-English Prediction Models Built Using Data from 2023/24 AY.\\newline" -->
+
+<!-- df.eval.en.wide.2324 |>  -->
+<!--   # filter(method == "Youden") |>  -->
+<!--   mutate(grade = factor(grade, levels = c("K", "G1", "G2")), -->
+<!--          model = str_sub(model, 3, 100) -->
+<!--   ) |> -->
+<!--   arrange(grade, model) |>  -->
+<!--   unique() |>  -->
+<!--   select(c(grade, -->
+<!--            model, -->
+<!--            # method, -->
+<!--            contains("n_"), -->
+<!--            contains("Accuracy_"), -->
+<!--            contains("Sensitivity"), -->
+<!--            contains("Specificity"), -->
+<!--            contains(".Accuracy"), -->
+<!--            contains("Prevalence"), -->
+<!--            -contains("Precision") -->
+<!--   ) -->
+<!--   ) |>  -->
+<!--   select(c(grade, -->
+<!--            model, -->
+<!--            # method, -->
+<!--            contains("All"), -->
+<!--            contains("EL"), -->
+<!--            contains("EO") -->
+<!--            ) -->
+<!--          ) %>%  -->
+<!--   mutate(across(c(contains("Accuracy"), contains("Sensitivity"), contains("Specificity")), color_format)) %>%  -->
+<!--   kable(format = "latex", -->
+<!--         escape = FALSE, -->
+<!--         booktabs = TRUE, -->
+<!--         digits = 3, -->
+<!--         align = c("l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"), -->
+<!--         col.names = c("Grade", -->
+<!--                       "Predictors", -->
+<!--                       # "Method", -->
+<!--                       "n", -->
+<!--                       "Acc.", -->
+<!--                       "B.Acc.", -->
+<!--                       "Sens.", -->
+<!--                       "Spec.", -->
+<!--                       "Prev.", -->
+<!--                       "P.Prev.", -->
+<!--                       "n", -->
+<!--                       "Acc.", -->
+<!--                       "B.Acc.", -->
+<!--                       "Sens.", -->
+<!--                       "Spec.", -->
+<!--                       "Prev.", -->
+<!--                       "P.Prev.", -->
+<!--                       "n", -->
+<!--                       "Acc.", -->
+<!--                       "B.Acc.", -->
+<!--                       "Sens.", -->
+<!--                       "Spec.", -->
+<!--                       "Prev.", -->
+<!--                       "P.Prev." -->
+<!--         ), -->
+<!--         linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 3)) -->
+<!--   ) |>  -->
+<!--   kable_styling( -->
+<!--     full_width = FALSE, -->
+<!--     latex_options = c("scale_down") -->
+<!--   ) |>  -->
+<!--   add_header_above(c(" " = 2, "All" = 7, "EL" = 7, "EO" = 7)) |>  -->
+<!--   add_footnote(label = "Note. green: >= .8; black: >= .7; yellow: >= .6; red otherwise", notation = "none") -->
+<!-- ``` -->
+
+\elandscape
+
+## Application to MV2 data (23/24 Only)
+
+
+
+```{r mv2-eval-en-2324}
+
+df.eval.mv2.en <- data.frame(grade = as.character(), 
+                             model = as.character(),
+                             n = as.numeric(),
+                             pred.prev = as.numeric()
+)
+
+groups = c("All", "EL", "EO")
+lg ="English"
+
+df.mv2 <- read_rds("../multitudes/data/df-scores-combined-2025thetas_2025-07-24.Rdata") %>% 
+  filter(event == "Fall24") %>% 
+  mutate(grade = case_when(grade == "Kindergarten" ~ "K",
+                           grade == "Grade 1" ~ "G1",
+                           grade == "Grade 2" ~ "G2",
+                           ),
+         task = case_when(lang == "en-US" ~ paste0(task, "_e"),
+                          lang == "es-US" ~ paste0(task, "_s")
+                          ),
+         task = tolower(task)
+         )
+
+for (grd in names(models)) {
+  for (mdl in names(models[[grd]])) {
+    # get appropriate model & corresponding optimal cutpoint
+    
+    df.model <- df.mv2 %>% 
+      filter(grade == grd) %>% 
+      select(c(student_id,
+               task,
+               score
+               )
+             ) |> 
+      unique() |> 
+      pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
+      ungroup()
+    
+    model <- pooled.models.en.2324[[grd]][[mdl]]
+    cutpoint <- df.eval.en.wide.2324 %>%
+      filter(grade == grade,
+             model == mdl
+             ) %>% 
+      pull(opt.cut)
+    # extract coefficients from pooled model
+    coef_vector <- summary(model) %>%
+      select(term, estimate) %>%
+      deframe()
+    # deploy model to reshaped and filtered 24/25 data
+    df.results <- df.model %>%
+      mutate(`(Intercept)` = 1) %>%
+      select(all_of(names(coef_vector))) %>%
+      mutate(
+        logit = as.vector(as.matrix(.) %*% coef_vector),
+        pred.prob = plogis(logit)
+    ) 
+    # add model predictions to df
+    df.out0 <- df.model %>% 
+      mutate(pred.prob = df.results$pred.prob,
+             pred.logit = df.results$logit,
+             pred.risk = case_when(pred.prob < cutpoint ~ 0,
+                                   pred.prob >= cutpoint ~ 1,
+                                   is.na(pred.prob) ~ NA,
+                                   )
+             ) %>% 
+      filter(!is.na(pred.risk)) %>% 
+      select(c(student_id, contains("pred"))) %>% 
+      left_join(df |>
+                  select(c(student_id,
+                           el,
+                           race,
+                           ethnicity,
+                           ever_disability
+                  )
+                  ) |>
+                  unique(),
+                by = "student_id"
+      )
+    
+    pred.prev = mean(df.out0$pred.risk == 1, na.rm = TRUE)
+    n = length(unique(df.out0$student_id))
+            
+    out <- c(grd, mdl, n, pred.prev)
+    
+    df.eval.mv2.en <- df.eval.mv2.en |> 
+      rbind(out)
+  }
+}
+
+```
+
+```{r}
+#| label: tbl-model-eval-prev-mv2-en-2324
+#| tbl-cap: "Predicted Prevalence of Risk in MV2 Sample (ALL Data Collected in Fall 2024) for English Models Using 23/24 Data Only.\\newline"
+
+colnames(df.eval.mv2.en) <- c("grade", "model", "n", "P.Prev." )
+df.eval.mv2.en |> 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
+         # model = str_sub(model, 3, 100)
+  ) |>
+  arrange(grade, model) |> 
+  unique() |>
+  kable(format = "latex",
+        escape = FALSE,
+        booktabs = TRUE,
+        digits = 3,
+        align = c("l", "l", "c", "c"),
+        col.names = c("Grade",
+                      "Predictors",
+                      "n",
+                      "P.Prev."
+        ),
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 5))
+  ) |> 
+  kable_styling(
+    full_width = FALSE,
+    latex_options = c("scale_down")
+  )
+```
+
+
+
+## Application to MV2 data (23/24 and 24/25 Combined)
+
+
+
+```{r mv2-eval-en-2325}
+
+df.eval.mv2.en <- data.frame(grade = as.character(), 
+                             model = as.character(),
+                             n = as.numeric(),
+                             pred.prev = as.numeric()
+)
+
+groups = c("All", "EL", "EO")
+lg ="English"
+
+for (grd in names(models)) {
+  for (mdl in names(models[[grd]])) {
+    # get appropriate model & corresponding optimal cutpoint
+    
+    df.model <- df.mv2 %>% 
+      filter(grade == grd) %>% 
+      select(c(student_id,
+               task,
+               score
+               )
+             ) |> 
+      unique() |> 
+      pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
+      ungroup()
+    
+    model <- pooled.models.en.2325[[grd]][[mdl]]
+    cutpoint <- df.eval.en.wide.2325 %>%
+      filter(grade == grade,
+             model == mdl
+             ) %>% 
+      pull(opt.cut)
+    # extract coefficients from pooled model
+    coef_vector <- summary(model) %>%
+      select(term, estimate) %>%
+      deframe()
+    # deploy model to reshaped and filtered 24/25 data
+    df.results <- df.model %>%
+      mutate(`(Intercept)` = 1) %>%
+      select(all_of(names(coef_vector))) %>%
+      mutate(
+        logit = as.vector(as.matrix(.) %*% coef_vector),
+        pred.prob = plogis(logit)
+    ) 
+    # add model predictions to df
+    df.out0 <- df.model %>% 
+      mutate(pred.prob = df.results$pred.prob,
+             pred.logit = df.results$logit,
+             pred.risk = case_when(pred.prob < cutpoint ~ 0,
+                                   pred.prob >= cutpoint ~ 1,
+                                   is.na(pred.prob) ~ NA,
+                                   )
+             ) %>% 
+      filter(!is.na(pred.risk)) %>% 
+      select(c(student_id, contains("pred"))) %>% 
+      left_join(df |>
+                  select(c(student_id,
+                           el,
+                           race,
+                           ethnicity,
+                           ever_disability
+                  )
+                  ) |>
+                  unique(),
+                by = "student_id"
+      )
+    
+    pred.prev = mean(df.out0$pred.risk == 1, na.rm = TRUE)
+    n = length(unique(df.out0$student_id))
+            
+    out <- c(grd, mdl, n, pred.prev)
+    
+    df.eval.mv2.en <- df.eval.mv2.en |> 
+      rbind(out)
+  }
+}
+
+```
+
+```{r}
+#| label: tbl-model-eval-prev-mv2-en-2325
+#| tbl-cap: "Predicted Prevalence of Risk in MV2 Sample (ALL Data Collected in Fall 2024) for English Models Using Combined 23/24 and 24/25 Data\\newline"
+
+colnames(df.eval.mv2.en) <- c("grade", "model", "n", "P.Prev." )
+df.eval.mv2.en |> 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
+         model = str_sub(model, 3, 100)
+  ) |>
+  arrange(grade, model) |> 
+  unique() |>
+  kable(format = "latex",
+        escape = FALSE,
+        booktabs = TRUE,
+        digits = 3,
+        align = c("l", "l", "c", "c"),
+        col.names = c("Grade",
+                      "Predictors",
+                      "n",
+                      "P.Prev."
+        ),
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 5))
+  ) |> 
+  kable_styling(
+    full_width = FALSE,
+    latex_options = c("scale_down")
+  )
+```
+
+
+
+# SPANISH MODELS
+
+
+
+```{r es-dfs}
+df.es <- df %>% 
+  filter(#ay == "AY 23/24",
+         lang == "es-US",
+         !is.na(risk_es)
+  ) %>% 
+  # disambiguate between AY23/24 and AY24/25 administrations to same student
+  mutate(student_id = case_when(ay == "AY 23/24" ~ paste0(student_id, "_2324"),
+                                ay == "AY 24/25" ~ paste0(student_id, "_2425")
+                                )
+         ) %>% 
+  mutate(model_lang = "Spanish",
+         task_lang = "Spanish"
+  ) %>% 
+  rename(risk = risk_es,
+         risk_ext = risk_ext_es,
+         outcomescore = outcomescore_es,
+         outcomepercentile = outcomepercentile_es
+  ) %>% 
+  mutate(risklabel = risk,
+         risk = case_when(risk == "Struggling" ~ 1,
+                          risk == "Not struggling" ~ 0
+         )
+  ) %>% 
+  select(-c(contains("_en"), contains("_es"))) %>% 
+  filter(!is.na(risk))
+
+N <- length(unique(df.es$student_id))
+n.school <- length(unique(df.es$school))
+n.district <- length(unique(df.es$district))
+```
+
+
+
+<!-- - built using data collected in the *2023/24 and 2024/25* academic years -->
+<!-- - using recalculated theta scores using the updated (MV3/2025) item parameters -->
+<!-- - *N* = `r N` unique students (with some students featuring in both AYs) from `r n.school` schools across `r n.district` districts -->
+
+## Sample
+
+<!-- \blandscape -->
+
+
+```{r}
+#| label: tbl-sample-es
+#| tbl-cap: "Demographic Characteristics of the Sample for the Spanish Prediciton Model (N = 979) by Grade\\newline"
+df.es %>% 
+  select(c(student_id, grade, gender, race, ethnicity, el, ever_disability, home_lang)) %>%
+  unique() %>% 
+  # mutate(lang = case_when(lang == "en-US" ~ "Spanish",
+  #                         lang == "es-US" ~ "Spanish"
+  # )
+  # ) %>% 
+  select(-student_id) %>% 
+  tbl_summary(by = grade,
+              label = c(gender ~ "Gender",
+                        race ~ "Race",
+                        ethnicity ~ "Ethnicity",
+                        el ~ "ELPD",
+                        ever_disability  ~ "Ever IEP/504",
+                        home_lang ~ "Home Language"
+              )
+  ) %>% 
+  modify_footnote(everything() ~ NA)
+```
+
+
+<!-- \elandscape -->
+  \FloatBarrier
+
+## Descriptives
+
+### Distributions of Spanish Multitudes Tasks
+
+
+
+```{r}
+#| label: fig-distributions-es
+#| fig-cap: "Distributions of Spanish Multitudes Tasks by Grade (Fall '23 & Fall '24 Combined)"
+#| fig-height: 5
+plots <- list()
+df.es$grade <- factor(df.es$grade, levels = c("K", "G1", "G2"))
+
+for (t in unique(df.es$task)) {
+  plot <- df.es %>% 
+    filter(task == t) %>% 
+    ggplot(aes(x = score, group = grade, fill = factor(grade, levels = c("K", "G1", "G2")))) +
+    geom_density(alpha = .5) +
+    theme(legend.position = "bottom") +
+    scale_fill_manual(values = palette.grades, drop = FALSE) +
+    labs(x = "Score",
+         y = " ",
+         title = paste(t),
+         fill = "Grade") +
+    theme(axis.text.y= element_blank(),
+          axis.title.x = element_blank())
+  plots[[t]] <- plot
+}
+
+ggarrange(plotlist = plots,
+          common.legend = TRUE,
+          legend = "bottom"
+)
+```
+
+
+
+### Distributions of Spanish Outcome Measures
+
+
+
+```{r fig.height=2.5}
+#| label: fig-outcomes-es
+#| fig-cap: "Distribution of Woodcock-Muñoz Basic Reading Skills Cluster (for Kindergarten) Broad Reading Cluster (for Grades 1 and 2) by Grade and Language with Struggling Readers (</= 20th Percentile) Highlighted (Spring '24 and Spring '25 Combined)."
+
+df.es %>% 
+  ggplot(aes(x = outcomescore)) +
+  geom_vline(xintercept = 70, colour = "gray", linetype = 2) +
+  geom_vline(xintercept = 85, colour = "gray", linetype = 2) +
+  geom_vline(xintercept = 100, colour = "darkgray", linetype = 1) +
+  geom_vline(xintercept = 115, colour = "gray", linetype = 2) +
+  geom_vline(xintercept = 130, colour = "gray", linetype = 2) +
+  geom_histogram(#fill = "darkgreen",
+    aes(group = risklabel, fill = risklabel),
+    binwidth = 1
+  ) +
+  facet_grid(cols = vars(grade),
+             # rows = vars(model_lang),
+             scales = "free"
+  ) +
+  scale_x_continuous(breaks = c(70, 85, 100, 115, 130), labels = c("70\n(-2SD)", "85\n", "100\n(M)", "115", "130\n(+2SD)")) +
+  labs(x = "Standard Score",
+       y = "No. of Students",
+       fill = "Defined as") +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = palette3)
+```
+
+```{r}
+#| label: tbl-outcomes-es-ay2324
+#| tbl-cap: "Comparison of Proportions of Struggling Readers (</= 20th Percentile) in the Study Sample Based on Overall Multitudes Sample and on Norms (Spring 2024)."
+
+df.es |> 
+  select(c(student_id,grade, risk_ext, risklabel)) |>
+  unique() |> 
+  select(-student_id) |> 
+  tbl_summary(by = c(grade),
+              label = c(risklabel ~ "Sample-based",
+                        risk_ext ~ "Norm-based"
+              )
+  ) |> 
+  modify_footnote(everything() ~ NA) |> 
+  modify_header(label ~ "**Reference**") |>
+  as_kable_extra(booktabs = TRUE,
+                 linesep = c("", "", "\\addlinespace")
+  ) |> 
+  kable_styling(latex_options = c("scale_down"))
+```
+
+
+
+\FloatBarrier
+
+## LOGO Cross-validated Models
+
+
+
+```{r model-comparison-es}
+df.modelcomp <- df.es
+
+models <- list("K" = list("0. LNF only" = "lnf_s",
+                          "1. LNF, RANO, ELIR, EVO" = "lnf_s + rano_s + elir_s + evo_s",
+                          "2. LNF, RANO, EVO" = "lnf_s + rano_s + evo_s",
+                          "3. LNF, RANO, ELIR" = "lnf_s + rano_s + elir_s"
+),
+"G1" = list("0. WRE only" = "wre_s",
+            "1. WRE, RANO, LSF, EVO" = "wre_s + rano_s + lsf_s + evo_s",
+            "2. WRE, RANO, LSF" = "wre_s + rano_s + lsf_s"
+),
+"G2" = list("0. WRE only" = "wre_s",
+            "1. WRE, RANL, EVO" = "wre_s + ranl_s + evo_s",
+            "2. WRE, RANL" = "wre_s + ranl_s"
+)
+)
+
+lg = "Spanish"
+
+roc.curves.es <- list()
+proc.curves.es <- list()
+pred.dfs.es <- list()
+# aucs <- list()
+pooled.models.es <- list("K" = list(),
+                         "G1" = list(),
+                         "G2" = list()
+                         )
+
+# Create a dataframe to hold evaluation metrics
+dummy_cm <- confusionMatrix(factor(c(0,1,1,0)), factor(c(0,1,0,1)))
+dummy_metrics <- extract_metrics(dummy_cm)
+df.eval.es <- data.frame(matrix(ncol = ncol(dummy_metrics), nrow = 0))
+colnames(df.eval.es) <- colnames(dummy_metrics)
+df.eval.es <- data.frame(grade = as.character(), 
+                         model = as.character(),
+                         predictors = as.character(),
+                         group = as.character(),
+                         n = as.numeric(),
+                         method = as.character(),
+                         opt.cut = as.numeric()
+) |> 
+  cbind(df.eval.es)
+
+groups = c("All")
+lg ="Spanish"
+
+for (grade in names(models)) {
+  for (model in names(models[[grade]])) {
+    
+    predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE)
+    
+    # build model
+    results <- build_prediction_model_bootstrap_cv(df.modelcomp,
+                                         grd = grade,
+                                         lg = lg,
+                                         mdl = models[[grade]][[model]]
+    )
+    
+    # get predictions
+    df.risk.pred <- results[[1]] |> 
+      # add relevant demographic variables
+      left_join(df |>
+                  select(c(student_id,
+                           el,
+                           race,
+                           ethnicity,
+                           ever_disability
+                  )
+                  ) |>
+                  unique(),
+                by = "student_id"
+      ) %>% 
+      filter(!is.na(pred.risk))
+    # get optimal cutpoint
+    opt.cut <- results[[3]]
+    
+    # no EL-grouping for Spanish
+    group = "All"
+    
+    cm = confusionMatrix(table(predicted = df.risk.pred$pred.risk,
+                               reference = df.risk.pred$risk),
+                         positive = "1")
+    
+    # n = length(unique(df.risk.pred$student_id))
+    n = df.risk.pred %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+    
+    df.out <- extract_metrics(cm) |> 
+      mutate(grade = grade,
+             model = model,
+             predictors = predictors,
+             group = group,
+             n = n,
+             method = "Youden",
+             opt.cut = opt.cut
+      )
+    
+    df.eval.es <- df.eval.es |> 
+      rbind(df.out)
+    
+    # save plots and prediction outputs for later use
+    out = plot_roc_curves_within_model(df.risk.pred, disaggregated = FALSE)
+    roc.curves.es[[model]] <- out[[1]] + labs(title = model,
+                                              subtitle = paste0("risk ~ ", models[[model]]))
+    proc.curves.es[[model]] <- out[[2]] + labs(title = model,
+                                               subtitle = paste0("risk ~ ", models[[model]]))
+    pred.dfs.es[[model]] <- df.risk.pred
+    # aucs[[model]] <- mean(out[[1]]$data$AUROC)
+    pooled.models.es[[grade]][[model]] <- results[[2]]
+  }
+}
+
+# re-arrange columns
+df.eval.es <- df.eval.es |> 
+  select(c(grade, group, model, predictors, method, opt.cut), everything())
+
+df.eval.es.wide <- df.eval.es |> 
+  pivot_wider(names_from = group, values_from = Accuracy:n) |> 
+  select(c(grade, model, predictors, method, opt.cut,
+           contains("_All"),
+           contains("_EL"),
+           contains("_EO")
+  )
+  ) %>% 
+  group_by(grade, model) |>
+  arrange(desc(Balanced.Accuracy_All)) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2"))) %>% 
+  arrange(grade)
+```
+
+```{r}
+#| label: tbl-model-eval-summary-es
+#| tbl-cap: "Spanish-to-Spanish Prediction Models Using Data from Both 2023/24 and 2024/25 AYs.\\newline"
+
+df.eval.es.wide |> 
+  # filter(method == "Youden") |> 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
+         model = str_sub(model, 3, 100)
+  ) |>
+  arrange(grade, model) |> 
+  unique() |> 
+  select(c(grade,
+           model,
+           # method,
+           contains("n_"),
+           contains("Accuracy_"),
+           contains("Sensitivity"),
+           contains("Specificity"),
+           contains(".Accuracy"),
+           contains("Prevalence"),
+           -contains("Precision")
+           )
+  ) |> 
+  select(c(grade,
+           model,
+           contains("All")
+           )
+         ) %>% 
+  mutate(across(c(contains("Accuracy"), contains("Sensitivity"), contains("Specificity")), color_format)) %>% 
+  # kable()
+  kable(format = "latex",
+        escape = FALSE,
+        booktabs = TRUE,
+        digits = 3,
+        align = c("l", "l", "c", "c", "c", "c", "c", "c", "c"),
+        col.names = c("Grade",
+                      "Predictors",
+                      "n",
+                      "Acc.",
+                      "B.Acc.",
+                      "Sens.",
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev."
+        ),
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 2), "\\addlinespace", rep("", 4))
+  ) |>
+  kable_styling(
+    full_width = FALSE,
+    latex_options = c("scale_down")
+  ) |>
+  add_header_above(c(" " = 2, "All" = 7)) |>
+  add_footnote(label = "Note. green: >= .8; black: >= .7; yellow: >= .6; red otherwise", notation = "none")
+```
+
+
+
+## Application to MV2 data (Combined 23/24 and 24/25)
+
+
+
+```{r mv2-eval-es}
+
+df.eval.mv2.es <- data.frame(grade = as.character(), 
+                             model = as.character(),
+                             n = as.numeric(),
+                             pred.prev = as.numeric()
+)
+
+groups = c("All", "EL", "EO")
+lg ="Spanish"
+
+for (grd in names(models)) {
+  for (mdl in names(models[[grd]])) {
+    # get appropriate model & corresponding optimal cutpoint
+    
+    df.model <- df.mv2 %>% 
+      filter(grade == grd) %>% 
+      select(c(student_id,
+               task,
+               score
+               )
+             ) |> 
+      unique() |> 
+      pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
+      ungroup()
+    
+    model <- pooled.models.es[[grd]][[mdl]]
+    cutpoint <- df.eval.es.wide %>%
+      filter(grade == grade,
+             model == mdl
+             ) %>% 
+      pull(opt.cut)
+    # extract coefficients from pooled model
+    coef_vector <- summary(model) %>%
+      select(term, estimate) %>%
+      deframe()
+    # deploy model to reshaped and filtered 24/25 data
+    df.results <- df.model %>%
+      mutate(`(Intercept)` = 1) %>%
+      select(all_of(names(coef_vector))) %>%
+      mutate(
+        logit = as.vector(as.matrix(.) %*% coef_vector),
+        pred.prob = plogis(logit)
+    ) 
+    # add model predictions to df
+    df.out0 <- df.model %>% 
+      mutate(pred.prob = df.results$pred.prob,
+             pred.logit = df.results$logit,
+             pred.risk = case_when(pred.prob < cutpoint ~ 0,
+                                   pred.prob >= cutpoint ~ 1,
+                                   is.na(pred.prob) ~ NA,
+                                   )
+             ) %>% 
+      filter(!is.na(pred.risk)) %>% 
+      select(c(student_id, contains("pred"))) %>% 
+      left_join(df |>
+                  select(c(student_id,
+                           el,
+                           race,
+                           ethnicity,
+                           ever_disability
+                  )
+                  ) |>
+                  unique(),
+                by = "student_id"
+      )
+    
+    pred.prev = mean(df.out0$pred.risk == 1, na.rm = TRUE)
+    n = length(unique(df.out0$student_id))
+            
+    out <- c(grd, mdl, n, pred.prev)
+    
+    df.eval.mv2.es <- df.eval.mv2.es |> 
+      rbind(out)
+  }
+}
+
+```
+
+```{r}
+#| label: tbl-model-eval-prev-mv2-es
+#| tbl-cap: "Predicted Prevalence of Risk in MV2 Sample (ALL Data Collected in Fall 2024) for Spanish Models.\\newline"
+
+colnames(df.eval.mv2.es) <- c("grade", "model", "n", "P.Prev." )
+df.eval.mv2.es |> 
+  mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
+         model = str_sub(model, 3, 100)
+  ) |>
+  arrange(grade, model) |> 
+  unique() |>
+  kable(format = "latex",
+        escape = FALSE,
+        booktabs = TRUE,
+        digits = 3,
+        align = c("l", "l", "c", "c"),
+        col.names = c("Grade",
+                      "Predictors",
+                      "n",
+                      "P.Prev."
+        ),
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 5))
+  ) |> 
+  kable_styling(
+    full_width = FALSE,
+    latex_options = c("scale_down")
+  )
+```
+

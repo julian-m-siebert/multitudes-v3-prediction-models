@@ -519,7 +519,10 @@ models <- list(
              ),
 "G1" = list("0. WRE only" = "wre_e",
             "1. WRE, RANO, LSF, EVO" = "wre_e + rano_e + lsf_e + evo_e",
-            "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e"
+            "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e",
+            "3. WRE, RANO" = "wre_e + rano_e",
+            "4. WRE, RANO, EVO" = "wre_e + rano_e + evo_e",
+            "5. WRE, EVO" = "wre_e + evo_e"
             ),
 "G2" = list("0. WRE only" = "wre_e",
             "1. WRE, RANL, EVO" = "wre_e + ranl_e + evo_e",
@@ -566,11 +569,11 @@ for (grade in names(models)) {
     predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE)
     
     # build model
-    results <- build_prediction_model_optcut(df.modelcomp,
-                                             grd = grade,
-                                             lg = lg,
-                                             mdl = models[[grade]][[model]]
-                                             )
+    results <- build_prediction_model_cv(df.modelcomp,
+                                         grd = grade,
+                                         lg = lg,
+                                         mdl = models[[grade]][[model]]
+                                         )
     
     # get predictions
     df.risk.pred <- results[[1]] |> 
@@ -597,7 +600,8 @@ for (grade in names(models)) {
                                    reference = df.risk.pred$risk),
                              positive = "1")
         
-        n = length(unique(df.risk.pred$student_id))
+        # n = length(unique(df.risk.pred$student_id))
+        n = df.risk.pred %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
         
         df.out <- extract_metrics(cm) |> 
           mutate(grade = grade,
@@ -605,19 +609,19 @@ for (grade in names(models)) {
                  predictors = predictors,
                  group = group,
                  n = n,
-                 method = method,
+                 method = "Youden",
                  opt.cut = opt.cut
           )
         
         df.eval.en.2324 <- df.eval.en.2324 |> 
           rbind(df.out)
         
-      } else if (group %in% c("EO", "EL")) {
+      } else if (group == "EO") {
         
         df.risk.pred.inner <- df.risk.pred |> 
-          filter(el == group)
+          filter(el == "EO")
         
-        n = length(unique(df.risk.pred.inner$student_id))
+        n = df.risk.pred.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
         if (n < 5) next
         
         cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
@@ -628,9 +632,34 @@ for (grade in names(models)) {
           mutate(grade = grade,
                  model = model,
                  predictors = predictors,
-                 group = group,
+                 group = "EO",
                  n = n,
-                 method = method,
+                 method ="Youden",
+                 opt.cut = opt.cut
+          )
+        
+        df.eval.en.2324 <- df.eval.en.2324 |> 
+          rbind(df.out)
+        
+      } else if (group == "EL") {
+        
+        df.risk.pred.inner <- df.risk.pred |> 
+          filter(el == "EL")
+        
+        n = df.risk.pred.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+        if (n < 5) next
+        
+        cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
+                                   reference = df.risk.pred.inner$risk),
+                             positive = "1")
+
+        df.out <- extract_metrics(cm) |> 
+          mutate(grade = grade,
+                 model = model,
+                 predictors = predictors,
+                 group = "EL",
+                 n = n,
+                 method ="Youden",
                  opt.cut = opt.cut
           )
         
@@ -687,55 +716,62 @@ df.eval.en.wide.2324 |>
   unique() |> 
   select(c(grade,
            model,
-           method,
+           # method,
            contains("n_"),
            contains("Accuracy_"),
            contains("Sensitivity"),
            contains("Specificity"),
            contains(".Accuracy"),
+           contains("Prevalence"),
            -contains("Precision")
   )
   ) |> 
   select(c(grade,
            model,
-           method,
+           # method,
            contains("All"),
            contains("EL"),
-           contains("EO"),
+           contains("EO")
            )
          ) %>% 
-  mutate(across(where(is.numeric), color_format)) |>
+  mutate(across(c(contains("Accuracy"), contains("Sensitivity"), contains("Specificity")), color_format)) %>% 
   kable(format = "latex",
         escape = FALSE,
         booktabs = TRUE,
         digits = 3,
-        align = c("l", "l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"),
+        align = c("l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"),
         col.names = c("Grade",
                       "Predictors",
-                      "Method",
+                      # "Method",
                       "n",
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
                       "Spec.",
+                      "Prev.",
+                      "P.Prev.",
                       "n",
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
                       "Spec.",
+                      "Prev.",
+                      "P.Prev.",
                       "n",
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
-                      "Spec."
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev."
         ),
-        linesep = c(rep("", 3), "\\addlinespace", rep("", 2), "\\addlinespace", rep("", 5))
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 3))
   ) |> 
   kable_styling(
     full_width = FALSE,
     latex_options = c("scale_down")
   ) |> 
-  add_header_above(c(" " = 3, "All" = 5, "EL" = 5, "EO" = 5)) |> 
+  add_header_above(c(" " = 2, "All" = 7, "EL" = 7, "EO" = 7)) |> 
   add_footnote(label = "Note. green: >= .8; black: >= .7; yellow: >= .6; red otherwise", notation = "none")
 ```
 
@@ -752,42 +788,26 @@ models <- list(
              ),
 "G1" = list("0. WRE only" = "wre_e",
             "1. WRE, RANO, LSF, EVO" = "wre_e + rano_e + lsf_e + evo_e",
-            "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e"
+            "2. WRE, RANO, LSF" = "wre_e + rano_e + lsf_e",
+            "3. WRE, RANO" = "wre_e + rano_e",
+            "4. WRE, RANO, EVO" = "wre_e + rano_e + evo_e",
+            "5. WRE, EVO" = "wre_e + evo_e"
             ),
 "G2" = list("0. WRE only" = "wre_e",
             "1. WRE, RANL, EVO" = "wre_e + ranl_e + evo_e",
             "2. WRE, RANL" = "wre_e + ranl_e"
             )
 )
-
 lg = "English"
 
-pooled.models.en.2324 <- list("K" = list(),
-                              "G1" = list(),
-                              "G2" = list()
-                              )
-opt.cuts.en.2324 <- list("K" = list(),
-                         "G1" = list(),
-                         "G2" = list()
-                         )
-
-# Create a dataframe to hold evaluation metrics
-dummy_cm <- confusionMatrix(factor(c(0,1,1,0)), factor(c(0,1,0,1)))
-dummy_metrics <- extract_metrics(dummy_cm)
-df.eval.en.2324 <- data.frame(matrix(ncol = ncol(dummy_metrics), nrow = 0))
-colnames(df.eval.en.2324) <- colnames(dummy_metrics)
-df.eval.en.2324 <- data.frame(grade = as.character(), 
-                              model = as.character(),
-                              predictors = as.character(),
-                              group = as.character(),
-                              n = as.numeric(),
-                              method = as.character(),
-                              opt.cut = as.numeric()
-                              ) |> 
-  cbind(df.eval.en.2324)
-
-groups = c("All", "EL", "EO")
-lg ="English"
+final.models.en.2324 <- list("K" = list(),
+                             "G1" = list(),
+                             "G2" = list()
+                             )
+final.opt.cuts.en.2324 <- list("K" = list(),
+                               "G1" = list(),
+                               "G2" = list()
+                               )
 
 for (grade in names(models)) {
   for (model in names(models[[grade]])) {
@@ -795,112 +815,16 @@ for (grade in names(models)) {
     predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE)
     
     # build model
-    results <- build_prediction_model_optcut(df.modelcomp,
-                                             grd = grade,
-                                             lg = lg,
-                                             mdl = models[[grade]][[model]]
-                                             )
+    results <- train_model_final(df.modelcomp,
+                                 grd = grade,
+                                 lg = lg,
+                                 mdl = models[[grade]][[model]]
+                                 )
     
-    # get predictions
-    df.risk.pred <- results[[1]] |> 
-      # add relevant demographic variables
-      left_join(df |>
-                  select(c(student_id,
-                           el,
-                           race,
-                           ethnicity,
-                           ever_disability
-                  )
-                  ) |>
-                  unique(),
-                by = "student_id"
-      )
-    # get optimal cutpoint
-    opt.cut <- results[[3]]
-    
-    for (group in groups) {
-      
-      if (group == "All") {
-        
-        cm = confusionMatrix(table(predicted = df.risk.pred$pred.risk,
-                                   reference = df.risk.pred$risk),
-                             positive = "1")
-        
-        n = length(unique(df.risk.pred$student_id))
-        
-        df.out <- extract_metrics(cm) |> 
-          mutate(grade = grade,
-                 model = model,
-                 predictors = predictors,
-                 group = group,
-                 n = n,
-                 method = method,
-                 opt.cut = opt.cut
-          )
-        
-        df.eval.en.2324 <- df.eval.en.2324 |> 
-          rbind(df.out)
-        
-      } else if (group %in% c("EO", "EL")) {
-        
-        df.risk.pred.inner <- df.risk.pred |> 
-          filter(el == group)
-        
-        n = length(unique(df.risk.pred.inner$student_id))
-        if (n < 5) next
-        
-        cm = confusionMatrix(table(predicted = df.risk.pred.inner$pred.risk,
-                                   reference = df.risk.pred.inner$risk),
-                             positive = "1")
-
-        df.out <- extract_metrics(cm) |> 
-          mutate(grade = grade,
-                 model = model,
-                 predictors = predictors,
-                 group = group,
-                 n = n,
-                 method = method,
-                 opt.cut = opt.cut
-          )
-        
-        df.eval.en.2324 <- df.eval.en.2324 |> 
-          rbind(df.out)
-      }
-    }
-    
-    df.plots <- df.risk.pred %>% filter(!is.na(pred.risk))
-    # save plots and prediction outputs for later use
-    out = plot_roc_curves_within_model(df.plots)
-    roc.curves.en.2324[[model]] <- out[[1]] + labs(title = model,
-                                                   subtitle = paste0("risk ~ ", models[[model]]))
-    proc.curves.en.2324[[model]] <- out[[2]] + labs(title = model,
-                                                    subtitle = paste0("risk ~ ", models[[model]]))
-    pred.dfs.en.2324[[model]] <- df.risk.pred
-    # aucs[[model]] <- mean(out[[1]]$data$AUROC)
-    
-    pooled.models.en.2324[[grade]][[model]] <- results[[2]]
-    opt.cuts.en.2324[[grade]][[model]] <- opt.cut
+    final.models.en.2324[[grade]][[model]] <- results[[1]]
+    final.opt.cuts.en.2324[[grade]][[model]] <- results[[2]]
   }
 }
-
-# re-arrange columns
-df.eval.en.2324 <- df.eval.en.2324 |> 
-  select(c(grade, group, model, predictors, method, opt.cut), everything())
-
-df.eval.en.wide.2324 <- df.eval.en.2324 |> 
-  pivot_wider(names_from = group, values_from = Accuracy:n) |> 
-  select(c(grade, model, predictors, method, opt.cut,
-           contains("_All"),
-           contains("_EL"),
-           contains("_EO")
-  )
-  ) %>% 
-  group_by(grade, model) |>
-  arrange(desc(Balanced.Accuracy_All)) %>% 
-  slice(1) %>% 
-  ungroup() %>% 
-  mutate(grade = factor(grade, levels = c("K", "G1", "G2"))) %>% 
-  arrange(grade)
 ```
 
 
@@ -940,12 +864,8 @@ for (grd in names(models)) {
       pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
       ungroup()
     
-    model <- pooled.models.en.2324[[grd]][[mdl]]
-    opt.cut <- df.eval.en.wide.2324 %>%
-      filter(grade == grd,
-             model == mdl
-             ) %>% 
-      pull(opt.cut)
+    model <- final.models.en.2324[[grd]][[mdl]]
+    opt.cut <- final.opt.cuts.en.2324[[grd]][[mdl]]
     # extract coefficients from pooled model
     coef_vector <- summary(model) %>%
       select(term, estimate) %>%
@@ -988,7 +908,7 @@ for (grd in names(models)) {
             )
     
     # determine optimisation method based on method used in 23/24 data
-    method = if_else(grd == "G1" & mdl == "2. WRE, RANO, LSF", "MaxSpSe", "Youden")
+    # method = if_else(grd == "G1" & mdl == "2. WRE, RANO, LSF", "MaxSpSe", "Youden")
     
     for (group in groups) {
         
@@ -997,7 +917,8 @@ for (grd in names(models)) {
                                      reference = df.temp.outer$risk),
                                positive = "1")
           
-          n = length(unique(df.temp.outer$student_id))
+          # n = length(unique(df.temp.outer$student_id))
+          n = df.temp.outer %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
           
           df.out <- extract_metrics(cm) |> 
             mutate(grade = grd,
@@ -1005,39 +926,68 @@ for (grd in names(models)) {
                    # predictors = predictors,
                    group = group,
                    n = n,
-                   method = method,
+                   method = "Youden",
                    opt.cut = opt.cut
             )
           
           df.eval.en.2425 <- df.eval.en.2425 |> 
             rbind(df.out)
           
-        } else if (group %in% c("EO", "EL")) {
+        } else if (group == "EO") {
           
           df.temp.inner <- df.temp.outer |> 
-            filter(el == group)
+            filter(el == "EO")
           
-          n.crit = df.temp.inner %>% nrow()
-          if (n.crit < 5) next
+          # n = df.temp.inner %>% nrow()
+          n = df.temp.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+          if (n < 5) next
           
           cm = confusionMatrix(table(predicted = df.temp.inner$pred.risk,
                                      reference = df.temp.inner$risk),
                                positive = "1")
           
-          n = length(unique(df.temp.inner$student_id))
+          # n = length(unique(df.temp.inner$student_id))
           
           df.out <- extract_metrics(cm) |> 
             mutate(grade = grd,
                    model = mdl,
                    # predictors = predictors,
-                   group = group,
+                   group = "EO",
                    n = n,
-                   method = method,
+                   method ="Youden",
                    opt.cut = opt.cut
             )
           
           df.eval.en.2425 <- df.eval.en.2425 |> 
             rbind(df.out)
+          
+        } else if (group == "EL") {
+          
+          df.temp.inner <- df.temp.outer |> 
+            filter(el == "EL")
+          
+          n = df.temp.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+          if (n < 5) next
+          
+          cm = confusionMatrix(table(predicted = df.temp.inner$pred.risk,
+                                     reference = df.temp.inner$risk),
+                               positive = "1")
+          
+          n = df.temp.inner %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+          
+          df.out <- extract_metrics(cm) |> 
+            mutate(grade = grd,
+                   model = mdl,
+                   # predictors = predictors,
+                   group = "EL",
+                   n = n,
+                   method ="Youden",
+                   opt.cut = opt.cut
+            )
+          
+          df.eval.en.2425 <- df.eval.en.2425 |> 
+            rbind(df.out)
+          
         }
       }
   }
@@ -1067,6 +1017,7 @@ df.eval.en.wide.2425 <- df.eval.en.2425 |>
 #| tbl-cap: "Best (Balanced Accuracy) English-to-English Prediction Models Built Using Data from 2023/24 AY.\\newline"
 
 df.eval.en.wide.2425 |> 
+  # filter(method == "Youden") |> 
   mutate(grade = factor(grade, levels = c("K", "G1", "G2")),
          model = str_sub(model, 3, 100)
   ) |>
@@ -1074,55 +1025,62 @@ df.eval.en.wide.2425 |>
   unique() |> 
   select(c(grade,
            model,
-           method,
+           # method,
            contains("n_"),
            contains("Accuracy_"),
            contains("Sensitivity"),
            contains("Specificity"),
            contains(".Accuracy"),
+           contains("Prevalence"),
            -contains("Precision")
   )
   ) |> 
   select(c(grade,
            model,
-           method,
+           # method,
            contains("All"),
            contains("EL"),
-           contains("EO"),
+           contains("EO")
            )
          ) %>% 
-  mutate(across(where(is.numeric), color_format)) |>
+  mutate(across(c(contains("Accuracy"), contains("Sensitivity"), contains("Specificity")), color_format)) %>% 
   kable(format = "latex",
         escape = FALSE,
         booktabs = TRUE,
         digits = 3,
-        align = c("l", "l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"),
+        align = c("l", "l", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"),
         col.names = c("Grade",
                       "Predictors",
-                      "Method",
+                      # "Method",
                       "n",
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
                       "Spec.",
+                      "Prev.",
+                      "P.Prev.",
                       "n",
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
                       "Spec.",
+                      "Prev.",
+                      "P.Prev.",
                       "n",
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
-                      "Spec."
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev."
         ),
-        linesep = c(rep("", 3), "\\addlinespace", rep("", 2), "\\addlinespace", rep("", 5))
+        linesep = c(rep("", 3), "\\addlinespace", rep("", 5), "\\addlinespace", rep("", 3))
   ) |> 
   kable_styling(
     full_width = FALSE,
     latex_options = c("scale_down")
   ) |> 
-  add_header_above(c(" " = 3, "All" = 5, "EL" = 5, "EO" = 5)) |> 
+  add_header_above(c(" " = 2, "All" = 7, "EL" = 7, "EO" = 7)) |> 
   add_footnote(label = "Note. green: >= .8; black: >= .7; yellow: >= .6; red otherwise", notation = "none")
 ```
 
@@ -1335,11 +1293,13 @@ for (grade in names(models)) {
     predictors <- gsub(" \\+ ", ", ", models[[grade]][[model]], fixed = FALSE)
     
     # build model
-    results <- build_prediction_model(df.modelcomp,
-                                      grd = grade,
-                                      lg = lg,
-                                      mdl = models[[grade]][[model]]
+    results <- build_prediction_model_cv(df.modelcomp,
+                                         grd = grade,
+                                         lg = lg,
+                                         mdl = models[[grade]][[model]]
     )
+    
+    # get predictions
     df.risk.pred <- results[[1]] |> 
       # add relevant demographic variables
       left_join(df |>
@@ -1352,87 +1312,43 @@ for (grade in names(models)) {
                   ) |>
                   unique(),
                 by = "student_id"
+      ) %>% 
+      filter(!is.na(pred.risk))
+    # get optimal cutpoint
+    opt.cut <- results[[3]]
+    
+    # no EL-grouping for Spanish
+    group = "All"
+    
+    cm = confusionMatrix(table(predicted = df.risk.pred$pred.risk,
+                               reference = df.risk.pred$risk),
+                         positive = "1")
+    
+    # n = length(unique(df.risk.pred$student_id))
+    n = df.risk.pred %>% filter(!is.na(pred.risk)) %>% select(student_id) %>% unique() %>% nrow()
+    
+    df.out <- extract_metrics(cm) |> 
+      mutate(grade = grade,
+             model = model,
+             predictors = predictors,
+             group = group,
+             n = n,
+             method = "Youden",
+             opt.cut = opt.cut
       )
     
-    #  "PROC01", "ObservedPrev","MeanPrev"
-    for (method in c("Youden", "MaxSpSe", "SpEqualSe", "MaxEfficiency", "PrevalenceMatching")) {
-      opt.cut <- optimal.cutpoints(X = "pred.prob",
-                                   status = "risk",
-                                   tag.healthy = 0,
-                                   methods = method,
-                                   data = as.data.frame(df.risk.pred),
-                                   pop.prev = NULL, 
-                                   ci.fit = TRUE,
-                                   conf.level = 0.95,
-                                   trace = FALSE
-      )
-      opt.cut <- get(method, opt.cut)$Global$optimal.cutoff$cutoff[1]
-      
-      df.temp.outer <- df.risk.pred |> 
-        mutate(risk.pred = if_else(pred.prob <= opt.cut, 0, 1))
-      
-      
-      for (group in groups) {
-        
-        if (group == "All") {
-          cm = confusionMatrix(table(predicted = df.temp.outer$risk.pred,
-                                     reference = df.temp.outer$risk),
-                               positive = "1")
-          
-          n = length(unique(df.temp.outer$student_id))
-          
-          df.out <- extract_metrics(cm) |> 
-            mutate(grade = grade,
-                   model = model,
-                   predictors = predictors,
-                   group = group,
-                   n = n,
-                   method = method,
-                   opt.cut = opt.cut
-            )
-          
-          df.eval.es <- df.eval.es |> 
-            rbind(df.out)
-          
-        } else if (group %in% c("EO", "EL")) {
-          
-          df.temp.inner <- df.temp.outer |> 
-            filter(el == group)
-          
-          n.crit = df.temp.inner %>% nrow()
-          if (n.crit < 5) next
-          
-          cm = confusionMatrix(table(predicted = df.temp.inner$risk.pred,
-                                     reference = df.temp.inner$risk),
-                               positive = "1")
-          
-          n = length(unique(df.temp.inner$student_id))
-          
-          df.out <- extract_metrics(cm) |> 
-            mutate(grade = grade,
-                   model = model,
-                   predictors = predictors,
-                   group = group,
-                   n = n,
-                   method = method,
-                   opt.cut = opt.cut
-            )
-          
-          df.eval.es <- df.eval.es |> 
-            rbind(df.out)
-        }
-      }
-      
-      # save plots and prediction outputs for later use
-      out = plot_roc_curves_within_model(df.risk.pred, disaggregated = FALSE)
-      roc.curves.es[[model]] <- out[[1]] + labs(title = model,
-                                             subtitle = paste0("risk ~ ", models[[model]]))
-      proc.curves.es[[model]] <- out[[2]] + labs(title = model,
+    df.eval.es <- df.eval.es |> 
+      rbind(df.out)
+    
+    # save plots and prediction outputs for later use
+    out = plot_roc_curves_within_model(df.risk.pred, disaggregated = FALSE)
+    roc.curves.es[[model]] <- out[[1]] + labs(title = model,
                                               subtitle = paste0("risk ~ ", models[[model]]))
-      pred.dfs.es[[model]] <- df.risk.pred
-      # aucs[[model]] <- mean(out[[1]]$data$AUROC)
-      pooled.models.es[[grade]][[model]] <- results[[2]]
-    }
+    proc.curves.es[[model]] <- out[[2]] + labs(title = model,
+                                               subtitle = paste0("risk ~ ", models[[model]]))
+    pred.dfs.es[[model]] <- df.risk.pred
+    # aucs[[model]] <- mean(out[[1]]$data$AUROC)
+    pooled.models.es[[grade]][[model]] <- results[[2]]
   }
 }
 
@@ -1475,6 +1391,7 @@ df.eval.es.wide |>
            contains("Sensitivity"),
            contains("Specificity"),
            contains(".Accuracy"),
+           contains("Prevalence"),
            -contains("Precision")
   )
   ) |> 
@@ -1499,7 +1416,9 @@ df.eval.es.wide |>
                       "Acc.",
                       "B.Acc.",
                       "Sens.",
-                      "Spec."
+                      "Spec.",
+                      "Prev.",
+                      "P.Prev."
                       # "n",
                       # "Acc.",
                       # "B.Acc.",
@@ -1517,7 +1436,7 @@ df.eval.es.wide |>
     full_width = FALSE,
     latex_options = c("scale_down")
   ) |> 
-  add_header_above(c(" " = 3, "All" = 5
+  add_header_above(c(" " = 3, "All" = 7
                      # "EL" = 5, "EO" = 5
                      )
                    ) |> 

@@ -358,137 +358,7 @@ plot_boruta <- function(borutadata, disaggregated = TRUE, type = "A") {
 }
 
 # PREDICTION MODEL =====
-
-build_prediction_model <- function(data, grd, lg, mdl) {
-  # Function to run a BOY to EOY prediction model (logistic regression)
-  # df: always the main df
-  # grd: the grade for which to run the model
-  # lg: the language for which to run the model
-  # mdl: the model specification
-  
-  mdl <- paste0("risk ~ ", mdl)
-  
-  df.model0 <- data |> 
-    filter(grade == grd,
-           model_lang == lg,
-           task_lang == lg,
-           # event == "Fall24",
-           # (event == "Fall23" | (event == "Spring24" & grepl("wc", task))),
-           !is.na(risk)
-    ) |> 
-    # select(c(student_id, grade, group = district, el, race, ethnicity, home_lang, ever_disability, risk, task, score)) |> 
-    select(c(student_id,
-             group = district,
-             risk,
-             task,
-             score
-    )
-    ) |> 
-    unique() |> 
-    pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
-    ungroup()
-
-  # run model with leave-one-group-out cross-validation (group = district)
-  groups <- unique(df.model0$group)
-  
-  # df to store LOGO-CV results
-  df.results <- data.frame(student_id = as.character(),
-                           pred.logit = as.numeric(),
-                           pred.prob = as.numeric()
-  )
-  # implement LOGO-CV
-  for (g in groups) {
-    
-    # overcome ominous error
-    if (grd == "G2" & lg == "Spanish" & g == "district_15") next
-    # if (grd == "Grade 2" & lg == "Spanish" & g == "district_3") next
-    
-    if (nrow(df.model0 %>% filter(group == g)) < 10) next
-    
-    # df to store temporary LOGO-CV results for one iteration
-    df.results.temp <- data.frame(student_id = as.character(),
-                                  pred.logit = as.numeric(),
-                                  pred.prob = as.numeric()
-    )
-    
-    # identify group to leave out
-    df.model <- df.model0 |> 
-      mutate(ignore = if_else(group == g, TRUE, FALSE))
-    
-    # if (nrow(df.model) < 100) next
-    
-    # impute data (using only training data)
-    # imp <- mice(df.model, ignore = df.model$ignore, m = 5, print = FALSE, seed = 1)
-    imp <- mice(df.model, ignore = df.model$ignore, m = 5, print = FALSE, seed = 1)
-    
-    # fit model (based on training data)
-    # fit.imp <- with(imp, glm(as.formula(mdl), family = "binomial"))
-    fit.imp <- with(imp, glm(as.formula(mdl), family = "binomial"), subset = ignore == FALSE)
-
-    # obtain and pool predictions ========================================
-    # based on Stef van Buuren's code (https://github.com/amices/mice/issues/82)
-    predm.logit <- lapply(getfit(fit.imp), predict, se.fit = TRUE)
-    Q <- sapply(predm.logit, `[[`, "fit") # predictions
-    U <- sapply(predm.logit, `[[`, "se.fit")^2 # prediction variance
-    dfcom <- getfit(fit.imp)[[1]]$df.null
-    pred.logit <- matrix(NA, nrow = nrow(Q), ncol = 3,
-                         dimnames = list(NULL, c("fit", "se.fit", "df")))
-    for (i in 1:nrow(Q)) {
-      pi <- pool.scalar(Q[i, ], U[i, ], n = dfcom + 1)
-      pred.logit[i, 1] <- pi[["qbar"]]
-      pred.logit[i, 2] <- sqrt(pi[["t"]])
-      pred.logit[i, 3] <- pi[["df"]]
-    }
-    
-    # probabilities
-    predm.prob <- lapply(getfit(fit.imp), predict, type = "response", se.fit = TRUE)
-    Q <- sapply(predm.prob, `[[`, "fit") # predictions
-    U <- sapply(predm.prob, `[[`, "se.fit")^2 # prediction variance
-    dfcom <- getfit(fit.imp)[[1]]$df.null
-    pred.prob <- matrix(NA, nrow = nrow(Q), ncol = 3,
-                        dimnames = list(NULL, c("fit", "se.fit", "df")))
-    for (i in 1:nrow(Q)) {
-      pi <- pool.scalar(Q[i, ], U[i, ], n = dfcom + 1)
-      pred.prob[i, 1] <- pi[["qbar"]]
-      pred.prob[i, 2] <- sqrt(pi[["t"]])
-      pred.prob[i, 3] <- pi[["df"]]
-    }
-    
-    df.results.temp <- df.model |> 
-      select(student_id) |> 
-      mutate(pred.logit = pred.logit[,1],
-             pred.prob = pred.prob[,1]
-      )
-    
-    df.results <- df.results |> 
-      rbind(df.results.temp)
-  }
-  
-  # pool estimates for model output
-  model = pool(fit.imp)
-  
-  # add true risk label back to output df
-  df.results <- df.results |> 
-    left_join(data |> 
-                select(c(student_id,
-                         risk
-                )
-                ) |> 
-                unique(),
-              by = "student_id"
-    ) |> 
-    # aggregate over all folds
-    group_by(student_id) |> 
-    mutate(pred.logit = mean(pred.logit),
-           pred.prob = mean(pred.prob),
-    ) |> 
-    ungroup() |> 
-    unique()
-  
-  return(list(df.results, model))
-}
-
-build_prediction_model_optcut <- function(data, grd, lg, mdl) {
+build_prediction_model_cv <- function(data, grd, lg, mdl) {
   # Updated function to run a BOY to EOY prediction model (logistic regression)
   # and also identify optimal cut and method based on training data only
   # df: always the main df
@@ -502,12 +372,10 @@ build_prediction_model_optcut <- function(data, grd, lg, mdl) {
     filter(grade == grd,
            model_lang == lg,
            task_lang == lg,
-           # event == "Fall24",
-           # (event == "Fall23" | (event == "Spring24" & grepl("wc", task))),
            !is.na(risk)
     ) |> 
-    # select(c(student_id, grade, group = district, el, race, ethnicity, home_lang, ever_disability, risk, task, score)) |> 
     select(c(student_id,
+             el,
              group = district,
              risk,
              task,
@@ -561,7 +429,7 @@ build_prediction_model_optcut <- function(data, grd, lg, mdl) {
     # 2. Get and combine all completed datasets and models
     completed.data <- complete(imp, action = "all") 
     imputations <- tibble(
-      imp = 1:m,
+      imp = 1:5,
       data = completed.data,
       model = getfit(fit.imp)
     )
@@ -583,34 +451,302 @@ build_prediction_model_optcut <- function(data, grd, lg, mdl) {
       data = as.data.frame(df.train.all),
       ci.fit = FALSE,
       trace = FALSE
-    )[[method]]$Global$optimal.cutoff$cutoff
-    # opt.cut <- opt.cut[[method]]$Global$optimal.cutoff$cutoff
+    )[["Youden"]]$Global$optimal.cutoff$cutoff
     # save optcut for later aggregation
     opt.cuts <- c(opt.cuts, opt.cut)
     
-    # predictions for test data using pooled coefficients and optcut estimated from tain data ====
-    df.results.temp <- df.model %>%
-      filter(ignore == TRUE) %>%
-      select(student_id, risk) %>% 
-      cbind(
-        df.preds.temp <- df.model %>%
-          filter(ignore == TRUE) %>% 
-          mutate(`(Intercept)` = 1) %>%
-          select(all_of(names(coef_vector))) %>%
-          mutate(
-            pred.logit = as.vector(as.matrix(.) %*% coef_vector),
-            pred.prob = plogis(pred.logit),
-            pred.risk = if_else(pred.prob <= opt.cut, 0, 1)
-          ) %>% 
-          select(c(pred.logit, pred.prob, pred.risk))
+    # predictions for validation data =======
+    # using pooled coefficients (from coef_vector) and fold-specific opt.cut
+    # 1. Get validation rows
+    val_rows <- which(df.model$ignore == TRUE)
+    # 2. Get and combine all completed datasets and models
+    completed.data <- complete(imp, action = "all") 
+    # For each imputation, take test rows and predict with pooled coefficients
+    df.test.preds <- map_dfr(completed.data, function(imp_data) {
+  
+      test_data <- imp_data[val_rows, ]
+      # Add intercept column for matrix multiplication
+      test_data <- test_data %>%
+        mutate(`(Intercept)` = 1) %>%
+        select(all_of(names(coef_vector)))  # select columns matching model terms including intercept
+      # Calculate prob and logit
+      pred.logit <- as.vector(as.matrix(test_data) %*% coef_vector)
+      pred.prob <- plogis(pred.logit)
+      tibble(
+        student_id = imp_data[val_rows, "student_id"],
+        pred.logit = pred.logit,
+        pred.prob = pred.prob
+      )
+    }, .id = "imp")
+    
+    # Average predicted probabilities across imputations for each student
+    df.results.temp <- df.test.preds %>%
+      group_by(student_id) %>%
+      summarize(
+        pred.logit = mean(pred.logit),
+        pred.prob = mean(pred.prob)
+      ) %>%
+      ungroup() %>% 
+    # Add true risk from original df.model
+      left_join(df.model %>% filter(ignore == TRUE) %>% select(student_id, risk), by = "student_id") %>%
+      mutate(
+        pred.risk = if_else(pred.prob > opt.cut, 1, 0)
       )
     
     # Append results
     df.results <- rbind(df.results, df.results.temp)
   }
+  
+  if (nrow(df.results) == 0) {
+    warning("No test groups met criteria for modeling. Check data filtering.")
+    return(NULL)
+  }
+  
   opt.cut <- mean(opt.cuts, na.rm = TRUE)
-  return(list(df.results, model, opt.cut))
+  return(list(results = df.results, model = model, opt.cut = opt.cut))
 }
+
+# PREDICTION MODEL =====
+build_prediction_model_bootstrap_cv <- function(data, grd, lg, mdl, n_boot = 10, el_ratio = 0.2) {
+  # Updated function to run a BOY to EOY prediction model (logistic regression)
+  # and also identify optimal cut and method based on training data only
+  # df: always the main df
+  # grd: the grade for which to run the model
+  # lg: the language for which to run the model
+  # mdl: the model specification
+  
+  mdl <- paste0("risk ~ ", mdl)
+  
+  df.model0 <- data |> 
+    filter(grade == grd,
+           model_lang == lg,
+           task_lang == lg,
+           !is.na(risk)
+    ) |> 
+    select(c(student_id,
+             el,
+             group = district,
+             risk,
+             task,
+             score
+    )
+    ) |> 
+    unique() |> 
+    pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
+    ungroup()
+  
+  # run model with leave-one-group-out cross-validation (group = district)
+  groups <- unique(df.model0$group)
+  
+  # df to store LOGO-CV results
+  df.results <- data.frame(student_id = as.character(),
+                           pred.logit = as.numeric(),
+                           pred.prob = as.numeric(),
+                           pred.risk = as.numeric()
+  )
+  opt.cuts <- c()
+  # implement LOGO-CV ======
+  for (g in groups) {
+    
+    # Skip problematic or small groups
+    if (grd == "G2" & lg == "Spanish" & g == "district_15") next
+    if (nrow(df.model0 %>% filter(group == g)) < 10) next
+    
+    # test-train split =====
+    # Create 'ignore' flag for test group
+    df.model <- df.model0 %>%
+      mutate(ignore = if_else(group == g, TRUE, FALSE))
+    
+    # === stratified bootstrapping on training data only ===
+    train_data_all <- list()
+    df.train_base <- df.model %>% filter(!ignore)
+    
+    for (b in 1:n_boot) {
+      n_total <- nrow(df.train_base)
+      n_el <- round(n_total * el_ratio)
+      n_eo <- n_total - n_el
+      
+      df_el <- df.train_base %>% filter(el == "EL") %>% sample_n(min(n_el, n()), replace = TRUE)
+      df_eo <- df.train_base %>% filter(el == "EO") %>% sample_n(min(n_eo, n()), replace = TRUE)
+      
+      df_train_boot <- bind_rows(df_el, df_eo) %>% sample_frac(1)
+      train_data_all[[b]] <- df_train_boot
+    }
+    
+    df.train.all.boot <- bind_rows(train_data_all, .id = "boot")
+    
+    # Combine with validation
+    df.model <- bind_rows(
+      df.train.all.boot %>% select(-boot),
+      df.model %>% filter(ignore)
+    ) %>% mutate(ignore = student_id %in% df.model$student_id[df.model$ignore])
+    
+    # impute and fit model on training data only ======
+    # Impute missing data (train/test split maintained with `ignore`)
+    imp <- mice(df.model, ignore = df.model$ignore, m = 5, print = FALSE)
+    
+    # Fit model using only training data
+    fit.imp <- with(imp, glm(as.formula(mdl), family = "binomial"), subset = ignore == FALSE)
+    
+    # pool estimates for model output
+    model = pool(fit.imp)
+    
+    # get pooled coefficients ====
+    coef_vector <- summary(pool(fit.imp)) %>%
+      select(term, estimate) %>%
+      deframe()
+    
+    # determine optimal cutoff based on training data======
+    # 1. Get training rows
+    train_rows <- which(df.model$ignore == FALSE)
+    # 2. Get and combine all completed datasets and models
+    completed.data <- complete(imp, action = "all") 
+    imputations <- tibble(
+      imp = 1:5,
+      data = completed.data,
+      model = getfit(fit.imp)
+    )
+    # 3. Process and combine all training datasets
+    df.train.all.imputed <- imputations %>% 
+      mutate(
+        df.train = map(data, ~ .x[train_rows, ]),
+        pred_prob = map2(model, df.train, ~ predict(.x, newdata = .y, type = "response")),
+        df.train = map2(df.train, pred_prob, ~ mutate(.x, pred.prob = .y))
+      ) %>%
+      select(imp, df.train) %>%
+      unnest(df.train)
+    # 4. determine optimal cutoff based on training data
+    opt.cut <- optimal.cutpoints(
+      X = "pred.prob",
+      status = "risk",
+      tag.healthy = 0,
+      method = "Youden",
+      data = as.data.frame(df.train.all.imputed),
+      ci.fit = FALSE,
+      trace = FALSE
+    )[["Youden"]]$Global$optimal.cutoff$cutoff
+    # save optcut for later aggregation
+    opt.cuts <- c(opt.cuts, opt.cut)
+    
+    # predictions for validation data =======
+    # using pooled coefficients (from coef_vector) and fold-specific opt.cut
+    # 1. Get validation rows
+    val_rows <- which(df.model$ignore == TRUE)
+    # 2. Get and combine all completed datasets and models
+    completed.data <- complete(imp, action = "all") 
+    # For each imputation, take test rows and predict with pooled coefficients
+    df.test.preds <- map_dfr(completed.data, function(imp_data) {
+      
+      test_data <- imp_data[val_rows, ]
+      # Add intercept column for matrix multiplication
+      test_data <- test_data %>%
+        mutate(`(Intercept)` = 1) %>%
+        select(all_of(names(coef_vector)))  # select columns matching model terms including intercept
+      # Calculate prob and logit
+      pred.logit <- as.vector(as.matrix(test_data) %*% coef_vector)
+      pred.prob <- plogis(pred.logit)
+      tibble(
+        student_id = imp_data[val_rows, "student_id"],
+        pred.logit = pred.logit,
+        pred.prob = pred.prob
+      )
+    }, .id = "imp")
+    
+    # Average predicted probabilities across imputations for each student
+    df.results.temp <- df.test.preds %>%
+      group_by(student_id) %>%
+      summarize(
+        pred.logit = mean(pred.logit),
+        pred.prob = mean(pred.prob)
+      ) %>%
+      ungroup() %>% 
+      # Add true risk from original df.model
+      left_join(df.model %>% filter(ignore == TRUE) %>% select(student_id, risk), by = "student_id") %>%
+      mutate(
+        pred.risk = if_else(pred.prob > opt.cut, 1, 0)
+      )
+    
+    # Append results
+    df.results <- rbind(df.results, df.results.temp)
+  }
+  
+  if (nrow(df.results) == 0) {
+    warning("No test groups met criteria for modeling. Check data filtering.")
+    return(NULL)
+  }
+  
+  opt.cut <- mean(opt.cuts, na.rm = TRUE)
+  return(list(results = df.results, model = model, opt.cut = opt.cut))
+}
+
+train_model_final <- function(data, grd, lg, mdl) {
+  # df: always the main df
+  # grd: the grade for which to run the model
+  # lg: the language for which to run the model
+  # mdl: the model specification
+  
+  mdl <- paste0("risk ~ ", mdl)
+  
+  df.model <- data |> 
+    filter(grade == grd,
+           model_lang == lg,
+           task_lang == lg,
+           !is.na(risk)
+    ) |> 
+    select(c(student_id,
+             group = district,
+             risk,
+             task,
+             score
+    )
+    ) |> 
+    unique() |> 
+    pivot_wider(names_from = task, values_from = score, values_fn = mean) |> 
+    ungroup()
+
+  # impute missing data ====
+  imp <- mice(df.model, m = 5, print = FALSE, seed = 1)
+  
+  # fit model ====
+  fit.imp <- with(imp, glm(as.formula(mdl), family = "binomial"))
+  # pool estimates for model output
+  model = pool(fit.imp)
+  # get pooled coefficients ====
+  coef_vector <- summary(pool(fit.imp)) %>%
+    select(term, estimate) %>%
+    deframe()
+  
+  # determine optimal cutoff ======
+  # 1. Get and combine all completed datasets and models
+  completed.data <- complete(imp, action = "all") 
+  imputations <- tibble(
+    imp = 1:5,
+    data = completed.data,
+    model = getfit(fit.imp)
+  )
+  # 2. Process and combine all training datasets
+  df.all <- imputations %>%
+    mutate(
+      df.train = map(data, ~ .x),
+      pred_prob = map2(model, df.train, ~ predict(.x, newdata = .y, type = "response")),
+      df.train = map2(df.train, pred_prob, ~ mutate(.x, pred.prob = .y))
+    ) %>%
+    select(imp, df.train) %>%
+    unnest(df.train)
+  # 3. determine optimal cutoff
+  opt.cut <- optimal.cutpoints(
+    X = "pred.prob",
+    status = "risk",
+    tag.healthy = 0,
+    method = "Youden",
+    data = as.data.frame(df.all),
+    ci.fit = FALSE,
+    trace = FALSE
+  )[["Youden"]]$Global$optimal.cutoff$cutoff
+
+  return(list(model, opt.cut))
+}
+
 
 extract_metrics <- function(cm) {
   # Function to extract metrics and create a single-row dataframe
@@ -632,40 +768,6 @@ extract_metrics <- function(cm) {
   
   return(df_metrics)
 }
-
-predict_from_pooled_coeffs <- function(pooled_model, formula_str, new_data, type = c("response", "link")) {
-  type <- match.arg(type)
-  
-  # Get pooled coefficients from the pooled model
-  coefs <- summary(pooled_model)$estimate
-  
-  # Convert formula string to actual formula
-  formula_obj <- as.formula(formula_str)
-  
-  # Generate design matrix for new data (handles interactions, etc.)
-  X <- model.matrix(formula_obj, data = new_data)
-  
-  # Sanity check: Ensure coefficient names match matrix columns
-  if (!all(names(coefs) %in% colnames(X))) {
-    stop("Mismatch between model coefficients and new_data. Check factor levels or variable names.")
-  }
-  
-  # Reorder columns if necessary
-  X <- X[, names(coefs), drop = FALSE]
-  
-  # Predict linear predictor (logit)
-  logit <- X %*% coefs
-  
-  if (type == "link") {
-    return(as.vector(logit))  # return logits
-  } else {
-    # Convert logit to probability
-    prob <- 1 / (1 + exp(-logit))
-    return(as.vector(prob))
-  }
-}
-
-
 
 # (P)ROC PLOTTING =======
 
